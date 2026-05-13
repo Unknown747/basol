@@ -1,0 +1,2 @@
+target/debug/deps/solana_analyzer-9fc0ea7332841ee3 filter=lfs diff=lfs merge=lfs -text
+target/debug/solana_analyzer filter=lfs diff=lfs merge=lfs -text
