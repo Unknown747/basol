@@ -175,11 +175,22 @@ pub struct TradingConfig {
     pub default_slippage: f64,
     pub max_positions: usize,
     /// Jika > 0: keluar otomatis jika posisi stuck lebih dari X menit.
-    /// Ideal untuk scalping agar modal tidak nganggur.
     pub max_hold_minutes: u64,
     /// Threshold P&L untuk time exit.
-    /// Contoh 3.0: jika profit < 3% setelah max_hold_minutes, keluar.
     pub time_exit_threshold_pct: f64,
+
+    // === 3-STAGE TAKE PROFIT ===
+    /// Level TP tahap 1 — jual tp1_sell_percent% posisi di sini
+    /// Harus > break-even (~3.81% untuk 0.05 SOL dengan slippage 1.5%)
+    /// Set 0.0 untuk nonaktifkan 3-stage dan gunakan single TP saja
+    pub tp1_percent: f64,
+    /// Berapa persen posisi dijual di TP1 (contoh: 33.0 = sepertiga)
+    pub tp1_sell_percent: f64,
+    /// Level TP tahap 2 — jual tp2_sell_percent% dari sisa posisi
+    pub tp2_percent: f64,
+    /// Berapa persen sisa posisi dijual di TP2 (contoh: 50.0 = setengah sisa)
+    pub tp2_sell_percent: f64,
+    // Sisa posisi (100 - tp1 - tp2*(100-tp1)/100) ditangani trailing stop atau TP final
 }
 
 impl TradingConfig {
@@ -225,6 +236,16 @@ impl TradingConfig {
         let time_exit_threshold_pct = std::env::var("TIME_EXIT_THRESHOLD_PCT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
 
+        // 3-stage TP — default 0.0 = nonaktif (pakai single TP biasa)
+        let tp1_percent = std::env::var("TP1_PERCENT")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        let tp1_sell_percent = std::env::var("TP1_SELL_PERCENT")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(33.0);
+        let tp2_percent = std::env::var("TP2_PERCENT")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        let tp2_sell_percent = std::env::var("TP2_SELL_PERCENT")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(50.0);
+
         Self {
             trading_enabled,
             max_position_sol,
@@ -239,10 +260,14 @@ impl TradingConfig {
             max_positions,
             max_hold_minutes,
             time_exit_threshold_pct,
+            tp1_percent,
+            tp1_sell_percent,
+            tp2_percent,
+            tp2_sell_percent,
         }
     }
 
-    /// Config default aman (untuk testing tanpa .env)
+    /// Config default aman (untuk testing tanpa .env) — 3-stage dinonaktifkan
     pub fn default_safe() -> Self {
         Self {
             trading_enabled: false,
@@ -258,26 +283,39 @@ impl TradingConfig {
             max_positions: 5,
             max_hold_minutes: 0,
             time_exit_threshold_pct: 5.0,
+            tp1_percent: 0.0,
+            tp1_sell_percent: 33.0,
+            tp2_percent: 0.0,
+            tp2_sell_percent: 50.0,
         }
     }
 
     /// Preset scalping untuk modal kecil (0.05–0.2 SOL per trade).
     ///
-    /// **Dasar matematis (0.05 SOL, pool $5k, slippage 1.5%):**
-    /// - Break-even: +3.81% (biaya round trip)
-    /// - Net profit di TP 20%: +16.2% bersih
-    /// - Net loss di SL 8%:    -11.3% bersih
-    /// - Risk/Reward: 1.43 (positif dengan win rate 42%+)
-    /// - Trailing mulai 12%: lindungi profit sebelum TP
-    /// - Time exit 40 menit: bebaskan modal yang nganggur
+    /// **3-Stage Take Profit (0.05 SOL, slippage 1.5%, pool $5k):**
+    ///
+    /// ```
+    /// TP1 +12% → jual 33% → net +8.2% pada porsi itu (AMAN, sudah di atas break-even 3.81%)
+    /// TP2 +20% → jual 50% sisa → net +16.2% pada porsi itu
+    /// TP3 +35% → jual semua sisa → net +31.2% (bonus jika market hot)
+    ///    ATAU trailing stop 3% jaga sisa posisi
+    /// SL  -8%  → jual SEMUA 100% seketika → net -11.3%
+    /// ```
+    ///
+    /// **Distribusi 0.05 SOL:**
+    /// - TP1: jual 0.0167 SOL → dapat balik ~0.0180 SOL (+8.2%)
+    /// - TP2: jual 0.0167 SOL dari sisa → dapat balik ~0.0194 SOL (+16.2%)
+    /// - TP3: jual 0.0167 SOL terakhir → dapat balik ~0.0219 SOL (+31.2%)
+    ///
+    /// **Setelah TP1 fire: tidak bisa rugi walau harga berbalik!**
     pub fn scalping_preset() -> Self {
         Self {
             trading_enabled: false,
             max_position_sol: 0.05,
-            min_position_sol: 0.02,
-            take_profit_percent: 20.0,
+            min_position_sol: 0.05,
+            take_profit_percent: 35.0,   // TP3 / TP final jika market terus naik
             stop_loss_percent: 8.0,
-            trailing_start_percent: 12.0,
+            trailing_start_percent: 12.0, // trailing aktif bersamaan dengan TP1
             trailing_distance_percent: 3.0,
             min_score_to_buy: 87.0,
             min_liquidity_usd: 5_000.0,
@@ -285,6 +323,11 @@ impl TradingConfig {
             max_positions: 2,
             max_hold_minutes: 40,
             time_exit_threshold_pct: 3.0,
+            tp1_percent: 12.0,           // TP1 di +12%
+            tp1_sell_percent: 33.0,      // jual 33% posisi
+            tp2_percent: 20.0,           // TP2 di +20%
+            tp2_sell_percent: 50.0,      // jual 50% dari sisa (= 33% posisi awal)
+                                         // sisa 34% posisi awal dikelola trailing/TP3
         }
     }
 }

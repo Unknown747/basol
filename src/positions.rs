@@ -11,13 +11,21 @@ pub struct Position {
     pub symbol: String,
     pub name: String,
     pub buy_price_usd: f64,
+    /// SOL yang diinvestasikan (dikurangi saat partial sell)
     pub amount_in_sol: f64,
+    /// Jumlah token yang dipegang (dikurangi saat partial sell)
     pub token_amount: f64,
     pub highest_price: f64,
     pub trailing_stop_active: bool,
     pub trailing_stop_price: f64,
     pub entry_time: DateTime<Utc>,
     pub score_at_entry: f64,
+
+    // === 3-STAGE TAKE PROFIT ===
+    /// Sudah jual sebagian di TP1?
+    pub tp1_fired: bool,
+    /// Sudah jual sebagian di TP2?
+    pub tp2_fired: bool,
 }
 
 impl Position {
@@ -42,13 +50,13 @@ impl Position {
             trailing_stop_price: 0.0,
             entry_time: Utc::now(),
             score_at_entry,
+            tp1_fired: false,
+            tp2_fired: false,
         }
     }
 
     pub fn profit_percent(&self, current_price: f64) -> f64 {
-        if self.buy_price_usd == 0.0 {
-            return 0.0;
-        }
+        if self.buy_price_usd == 0.0 { return 0.0; }
         (current_price - self.buy_price_usd) / self.buy_price_usd * 100.0
     }
 
@@ -62,20 +70,18 @@ impl Position {
         self.trailing_stop_active = true;
         self.trailing_stop_price = self.highest_price * (1.0 - trailing_percent / 100.0);
         println!(
-            "[TRAILING] {} - Trailing stop aktif di ${:.8} (trailing {:.1}%)",
+            "[TRAILING] {} - Trailing stop aktif di ${:.8} ({:.1}% dari puncak)",
             self.symbol, self.trailing_stop_price, trailing_percent
         );
     }
 
     pub fn update_trailing_stop(&mut self, current_price: f64, trailing_percent: f64) {
-        if !self.trailing_stop_active {
-            return;
-        }
+        if !self.trailing_stop_active { return; }
         let new_stop = current_price * (1.0 - trailing_percent / 100.0);
         if new_stop > self.trailing_stop_price {
             self.trailing_stop_price = new_stop;
             println!(
-                "[TRAILING] {} - Stop diupdate ke ${:.8}",
+                "[TRAILING] {} - Stop naik ke ${:.8}",
                 self.symbol, self.trailing_stop_price
             );
         }

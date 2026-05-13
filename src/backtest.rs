@@ -689,9 +689,14 @@ fn build_trading_config(
         min_liquidity_usd: std::env::var("MIN_LIQUIDITY_USD")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0),
         default_slippage: 1.0,
-        max_positions: 999, // tidak ada batas di backtest
+        max_positions: 999,
         max_hold_minutes: 0,
         time_exit_threshold_pct: 5.0,
+        // 3-stage TP dinonaktifkan di backtest (simulasi single TP per skenario)
+        tp1_percent: 0.0,
+        tp1_sell_percent: 33.0,
+        tp2_percent: 0.0,
+        tp2_sell_percent: 50.0,
     }
 }
 

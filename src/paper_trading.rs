@@ -77,7 +77,9 @@ pub struct PaperPosition {
     pub symbol: String,
     pub name: String,
     pub buy_price_usd: f64,
+    /// SOL yang masih dipegang (dikurangi saat partial sell)
     pub amount_sol: f64,
+    /// Token yang masih dipegang (dikurangi saat partial sell)
     pub token_amount: f64,
     pub highest_price: f64,
     pub trailing_stop_active: bool,
@@ -85,6 +87,10 @@ pub struct PaperPosition {
     pub entry_time: DateTime<Utc>,
     pub score_at_entry: f64,
     pub liquidity_at_entry: f64,
+    /// Sudah eksekusi TP1 partial?
+    pub tp1_fired: bool,
+    /// Sudah eksekusi TP2 partial?
+    pub tp2_fired: bool,
 }
 
 impl PaperPosition {
@@ -286,7 +292,6 @@ impl PaperTradingState {
             token_address: token_address.clone(),
             symbol: symbol.clone(),
             name: name.clone(),
-            // Simpan effective price — ini yang benar untuk hitung profit/loss
             buy_price_usd: effective_buy_price,
             amount_sol,
             token_amount,
@@ -296,6 +301,8 @@ impl PaperTradingState {
             entry_time: Utc::now(),
             score_at_entry: score,
             liquidity_at_entry: liquidity_usd,
+            tp1_fired: false,
+            tp2_fired: false,
         };
 
         self.positions.insert(token_address.clone(), position);
@@ -304,40 +311,58 @@ impl PaperTradingState {
         Ok(format!("PAPER_{}_slip{:.1}_impact{:.2}", id, slippage_percent, price_impact_pct))
     }
 
-    /// Eksekusi paper sell — 100% simulasi kondisi mainnet
-    /// Termasuk: network fee, slippage sell-side, dan price impact
+    /// Eksekusi paper sell — mendukung partial sell (3-stage TP) dan full close.
+    ///
+    /// - `percentage`: persen posisi yang dijual (1–100). 100 = close penuh.
+    /// - `tp_stage`: 0 = full close, 1 = TP1 partial, 2 = TP2 partial.
+    ///   Partial sell mengurangi amount_sol/token_amount dan menandai tp1/tp2_fired,
+    ///   posisi tetap aktif. Full close menghapus posisi dari daftar aktif.
     pub fn execute_sell(
         &mut self,
         token_address: &str,
-        quoted_sell_price: f64,   // harga quote dari DEX sebelum slippage
+        quoted_sell_price: f64,
         percentage: f64,
-        slippage_percent: f64,    // slippage configured
+        slippage_percent: f64,
         exit_reason: String,
+        tp_stage: u8,
     ) -> Result<PaperTrade, String> {
-        let pos = self.positions.remove(token_address)
-            .ok_or_else(|| format!("Posisi tidak ditemukan: {}", token_address))?;
+        let is_partial = tp_stage > 0 && percentage < 100.0;
 
-        // === SIMULASI MAINNET: Price impact saat jual ===
-        // Nilai token yang dijual dalam USD untuk estimasi impact
-        let sell_value_usd = pos.token_amount * quoted_sell_price;
-        let sell_impact_pct = if pos.liquidity_at_entry > 0.0 {
-            // Dampak jual biasanya setengah dari dampak beli (karena jual ke pool yg sudah ada)
-            (sell_value_usd / pos.liquidity_at_entry * 50.0).min(30.0)
-        } else {
-            0.0
+        // Ambil snapshot fields yang dibutuhkan (tanpa memindahkan ownership dulu)
+        let (sym, name, buy_price, pos_amount_sol, pos_tokens,
+             liquidity, score, entry_time, age_min) = {
+            let pos = self.positions.get(token_address)
+                .ok_or_else(|| format!("Posisi tidak ditemukan: {}", token_address))?;
+            (
+                pos.symbol.clone(), pos.name.clone(), pos.buy_price_usd,
+                pos.amount_sol, pos.token_amount,
+                pos.liquidity_at_entry, pos.score_at_entry,
+                pos.entry_time, pos.age_minutes(),
+            )
         };
 
-        // === SIMULASI MAINNET: Slippage pada jual (harga turun = lebih buruk untuk seller) ===
-        let total_cost_pct = slippage_percent + sell_impact_pct;
+        // Hitung berapa yang benar-benar dijual (persen dari posisi SAAT INI)
+        let sold_sol    = pos_amount_sol * percentage / 100.0;
+        let sold_tokens = pos_tokens     * percentage / 100.0;
+
+        // Price impact dari porsi yang dijual
+        let sell_value_usd = sold_tokens * quoted_sell_price;
+        let sell_impact_pct = if liquidity > 0.0 {
+            (sell_value_usd / liquidity * 50.0).min(30.0)
+        } else { 0.0 };
+
+        let total_cost_pct      = slippage_percent + sell_impact_pct;
         let effective_sell_price = quoted_sell_price * (1.0 - total_cost_pct / 100.0);
 
-        // Hitung profit berdasarkan harga efektif (beli effective vs jual effective)
-        let profit_pct = pos.profit_percent(effective_sell_price);
-        let profit_sol = pos.profit_sol(effective_sell_price);
+        // Profit dihitung terhadap harga beli efektif
+        let profit_pct = if buy_price > 0.0 {
+            (effective_sell_price - buy_price) / buy_price * 100.0
+        } else { 0.0 };
+        let profit_sol = sold_sol * profit_pct / 100.0;
 
-        // Proceeds = modal + profit, dikurangi network fee
-        let gross_proceeds = (pos.amount_sol + profit_sol) * (percentage / 100.0);
-        let net_proceeds = (gross_proceeds - NETWORK_FEE_SOL).max(0.0);
+        // Proceeds = (modal bagian yg dijual + profit) - network fee
+        let gross_proceeds = sold_sol + profit_sol;
+        let net_proceeds   = (gross_proceeds - NETWORK_FEE_SOL).max(0.0);
 
         self.current_balance_sol += net_proceeds;
         self.total_sells += 1;
@@ -356,35 +381,24 @@ impl PaperTradingState {
 
         if profit_pct > self.best_trade_pct {
             self.best_trade_pct = profit_pct;
-            self.best_trade_symbol = pos.symbol.clone();
+            self.best_trade_symbol = sym.clone();
         }
         if profit_pct < self.worst_trade_pct {
             self.worst_trade_pct = profit_pct;
-            self.worst_trade_symbol = pos.symbol.clone();
+            self.worst_trade_symbol = sym.clone();
         }
 
-        let trade = PaperTrade {
-            token_address: pos.token_address.clone(),
-            symbol: pos.symbol.clone(),
-            name: pos.name.clone(),
-            buy_price: pos.buy_price_usd,
-            sell_price: effective_sell_price,
-            amount_sol: pos.amount_sol,
-            profit_percent: profit_pct,
-            profit_sol,
-            buy_time: pos.entry_time,
-            sell_time: Utc::now(),
-            hold_duration_minutes: pos.age_minutes(),
-            exit_reason: exit_reason.clone(),
-            score_at_entry: pos.score_at_entry,
-            result,
+        let stage_label = match tp_stage {
+            1 => " [TP1 33%]",
+            2 => " [TP2 50%sisa]",
+            _ => "",
         };
 
         println!(
-            "[PAPER SELL] {} {} ({}) | quoted=${:.8} → effective=${:.8}\n\
-             [PAPER SELL]    Slip: {:.2}% | Impact: {:.2}% | P&L: {}{:.1}% ({}{:.4} SOL) | Saldo: {:.4} SOL",
+            "[PAPER SELL] {} {} ({}) | {:.0}%{} | ${:.8} → ${:.8}\n\
+             [PAPER SELL]    Slip: {:.2}% | Impact: {:.2}% | P&L: {}{:.1}% ({}{:.5} SOL) | Saldo: {:.4} SOL",
             if profit_pct >= 0.0 { "✅" } else { "❌" },
-            pos.name, pos.symbol,
+            name, sym, percentage, stage_label,
             quoted_sell_price, effective_sell_price,
             slippage_percent, sell_impact_pct,
             if profit_pct >= 0.0 { "+" } else { "" }, profit_pct,
@@ -392,7 +406,41 @@ impl PaperTradingState {
             self.current_balance_sol,
         );
 
+        let trade = PaperTrade {
+            token_address: token_address.to_string(),
+            symbol: sym,
+            name,
+            buy_price,
+            sell_price: effective_sell_price,
+            amount_sol: sold_sol,
+            profit_percent: profit_pct,
+            profit_sol,
+            buy_time: entry_time,
+            sell_time: Utc::now(),
+            hold_duration_minutes: age_min,
+            exit_reason,
+            score_at_entry: score,
+            result,
+        };
         self.closed_trades.push(trade.clone());
+
+        if is_partial {
+            // Kurangi posisi — jangan hapus
+            let remaining = 1.0 - percentage / 100.0;
+            if let Some(pos) = self.positions.get_mut(token_address) {
+                pos.amount_sol   *= remaining;
+                pos.token_amount *= remaining;
+                match tp_stage {
+                    1 => pos.tp1_fired = true,
+                    2 => pos.tp2_fired = true,
+                    _ => {}
+                }
+            }
+        } else {
+            // Full close — hapus posisi
+            self.positions.remove(token_address);
+        }
+
         Ok(trade)
     }
 
@@ -444,7 +492,12 @@ impl PaperTradingState {
         to_sell
     }
 
-    /// Evaluasi semua posisi untuk TP/SL/Trailing
+    /// Evaluasi semua posisi — mendukung 3-stage TP, SL, trailing stop, time exit.
+    ///
+    /// Return: `Vec<(addr, reason, price, sell_percent, tp_stage)>`
+    /// - `sell_percent`: berapa persen posisi yang harus dijual (1–100)
+    /// - `tp_stage`: 0 = full close, 1 = TP1, 2 = TP2
+    #[allow(clippy::too_many_arguments)]
     pub fn evaluate_positions(
         &mut self,
         prices: &HashMap<String, f64>,
@@ -452,8 +505,14 @@ impl PaperTradingState {
         stop_loss: f64,
         trailing_start: f64,
         trailing_distance: f64,
-    ) -> Vec<(String, String, f64)> {
-        let mut to_sell: Vec<(String, String, f64)> = Vec::new();
+        tp1_pct: f64,
+        tp1_sell_pct: f64,
+        tp2_pct: f64,
+        tp2_sell_pct: f64,
+        max_hold_minutes: u64,
+        time_exit_threshold: f64,
+    ) -> Vec<(String, String, f64, f64, u8)> {
+        let mut to_sell: Vec<(String, String, f64, f64, u8)> = Vec::new();
 
         for (addr, pos) in self.positions.iter_mut() {
             let current_price = match prices.get(addr) {
@@ -465,25 +524,52 @@ impl PaperTradingState {
                 pos.highest_price = current_price;
             }
 
-            let profit_pct = pos.profit_percent(current_price);
+            let profit_pct  = pos.profit_percent(current_price);
+            let age_minutes = pos.age_minutes();
 
-            // Take profit
-            if profit_pct >= take_profit {
-                to_sell.push((addr.clone(), format!("Take Profit +{:.1}%", profit_pct), current_price));
-                continue;
-            }
-
-            // Stop loss
+            // 1. STOP LOSS — potong rugi, jual SEMUA
             if profit_pct <= -stop_loss {
-                to_sell.push((addr.clone(), format!("Stop Loss {:.1}%", profit_pct), current_price));
+                to_sell.push((
+                    addr.clone(),
+                    format!("Stop Loss {:.1}%", profit_pct),
+                    current_price, 100.0, 0,
+                ));
                 continue;
             }
 
-            // Trailing stop
+            // 2. TP1 PARTIAL — jual tp1_sell_pct% jika belum fire
+            if tp1_pct > 0.0 && !pos.tp1_fired && profit_pct >= tp1_pct {
+                println!(
+                    "[PAPER TP1] 🎯 {} - profit +{:.1}% >= +{:.1}% | Jual {:.0}%",
+                    pos.symbol, profit_pct, tp1_pct, tp1_sell_pct
+                );
+                to_sell.push((
+                    addr.clone(),
+                    format!("TP1 Partial {:.0}% @ +{:.1}%", tp1_sell_pct, profit_pct),
+                    current_price, tp1_sell_pct, 1,
+                ));
+                continue;
+            }
+
+            // 3. TP2 PARTIAL — jual tp2_sell_pct% dari sisa jika TP1 sudah fire
+            if tp2_pct > 0.0 && pos.tp1_fired && !pos.tp2_fired && profit_pct >= tp2_pct {
+                println!(
+                    "[PAPER TP2] 🎯 {} - profit +{:.1}% >= +{:.1}% | Jual {:.0}% sisa",
+                    pos.symbol, profit_pct, tp2_pct, tp2_sell_pct
+                );
+                to_sell.push((
+                    addr.clone(),
+                    format!("TP2 Partial {:.0}% @ +{:.1}%", tp2_sell_pct, profit_pct),
+                    current_price, tp2_sell_pct, 2,
+                ));
+                continue;
+            }
+
+            // 4. TRAILING STOP — lindungi sisa posisi
             if profit_pct >= trailing_start {
                 if !pos.trailing_stop_active {
                     pos.trailing_stop_active = true;
-                    pos.trailing_stop_price = current_price * (1.0 - trailing_distance / 100.0);
+                    pos.trailing_stop_price  = current_price * (1.0 - trailing_distance / 100.0);
                     println!(
                         "[PAPER TRAILING] {} - Aktif di ${:.8} | Profit: +{:.1}%",
                         pos.symbol, pos.trailing_stop_price, profit_pct
@@ -494,9 +580,38 @@ impl PaperTradingState {
                         pos.trailing_stop_price = new_stop;
                     }
                     if current_price <= pos.trailing_stop_price {
-                        to_sell.push((addr.clone(), format!("Trailing Stop (profit: +{:.1}%)", profit_pct), current_price));
+                        to_sell.push((
+                            addr.clone(),
+                            format!("Trailing Stop (profit: +{:.1}%)", profit_pct),
+                            current_price, 100.0, 0,
+                        ));
+                        continue;
                     }
                 }
+            }
+
+            // 5. TP FINAL — jual semua sisa
+            // Syarat: jika 3-stage aktif → harus sudah TP2; jika single TP → langsung
+            let tp_final_eligible = if tp1_pct > 0.0 { pos.tp2_fired } else { true };
+            if tp_final_eligible && profit_pct >= take_profit {
+                to_sell.push((
+                    addr.clone(),
+                    format!("Take Profit Final +{:.1}%", profit_pct),
+                    current_price, 100.0, 0,
+                ));
+                continue;
+            }
+
+            // 6. TIME EXIT — posisi stuck
+            if max_hold_minutes > 0
+                && age_minutes >= max_hold_minutes as i64
+                && profit_pct < time_exit_threshold
+            {
+                to_sell.push((
+                    addr.clone(),
+                    format!("Time Exit {} menit | P&L: {:.1}%", age_minutes, profit_pct),
+                    current_price, 100.0, 0,
+                ));
             }
         }
 

@@ -418,6 +418,8 @@ impl From<PositionData> for Position {
             trailing_stop_price: d.trailing_stop_price,
             entry_time: d.entry_time,
             score_at_entry: d.score_at_entry,
+            tp1_fired: false,
+            tp2_fired: false,
         }
     }
 }
@@ -1731,10 +1733,28 @@ impl SolanaBot {
                             let _ = self.send_message(&msg).await;
                         }
 
-                        // Hapus posisi jika jual 100%
+                        // Update posisi setelah sell
                         if percentage >= 100.0 {
                             self.positions.remove(&addr);
                             println!("[AUTO SELL] Posisi {} dihapus dari daftar aktif", symbol);
+                        } else {
+                            // Partial sell — kurangi amount dan tandai TP stage
+                            let remaining = 1.0 - percentage / 100.0;
+                            if let Some(pos) = self.positions.get_mut(&addr) {
+                                pos.amount_in_sol *= remaining;
+                                pos.token_amount  *= remaining;
+                                match &trigger {
+                                    crate::sell_strategy::SellTrigger::PartialTakeProfit { stage: 1, .. } => {
+                                        pos.tp1_fired = true;
+                                        println!("[AUTO SELL] TP1 fire — sisa {:.0}% posisi tetap aktif", remaining * 100.0);
+                                    }
+                                    crate::sell_strategy::SellTrigger::PartialTakeProfit { stage: 2, .. } => {
+                                        pos.tp2_fired = true;
+                                        println!("[AUTO SELL] TP2 fire — sisa {:.0}% posisi tetap aktif", remaining * 100.0);
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                     }
                     Err(e) => {
@@ -1799,6 +1819,10 @@ impl SolanaBot {
             max_positions: self.paper_config.max_positions,
             max_hold_minutes: 0,
             time_exit_threshold_pct: 5.0,
+            tp1_percent: 0.0,
+            tp1_sell_percent: 33.0,
+            tp2_percent: 0.0,
+            tp2_sell_percent: 50.0,
         };
 
         let decision = evaluate_buy_signal(&signal, &config, &paper_positions_snapshot);
@@ -1884,18 +1908,24 @@ impl SolanaBot {
             }
         }
 
-        // Evaluasi TP/SL/Trailing
+        // Evaluasi TP/SL/Trailing — mendukung 3-stage TP
         let to_sell = self.paper_state.evaluate_positions(
             &prices,
             self.paper_config.take_profit_percent,
             self.paper_config.stop_loss_percent,
             self.paper_config.trailing_start_percent,
             self.paper_config.trailing_distance_percent,
+            self.trading_config.tp1_percent,
+            self.trading_config.tp1_sell_percent,
+            self.trading_config.tp2_percent,
+            self.trading_config.tp2_sell_percent,
+            self.trading_config.max_hold_minutes,
+            self.trading_config.time_exit_threshold_pct,
         );
 
         // Eksekusi sell paper
-        for (addr, reason, sell_price) in to_sell {
-            match self.paper_state.execute_sell(&addr, sell_price, 100.0, self.paper_config.default_slippage, reason) {
+        for (addr, reason, sell_price, sell_pct, tp_stage) in to_sell {
+            match self.paper_state.execute_sell(&addr, sell_price, sell_pct, self.paper_config.default_slippage, reason, tp_stage) {
                 Ok(trade) => {
                     let balance = self.paper_state.current_balance_sol;
                     let msg = format_paper_sell_notification(&trade, balance);
