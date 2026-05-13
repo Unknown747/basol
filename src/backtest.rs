@@ -335,9 +335,10 @@ fn estimate_score(pair: &DsPair) -> f64 {
         score += 5.0; // Unknown MC - moderate score
     }
 
-    // Mint authority (bonus 20 jika tidak diketahui, asumsikan ada)
-    // Karena backtest tidak punya data on-chain, beri nilai tengah
-    score += 10.0;
+    // Mint authority: backtest tidak punya data on-chain (Helius tidak dipanggil).
+    // Live bot skip token jika mint authority TIDAK direvoke.
+    // Untuk konservatif, beri 0 → backtest undercount peluang, tapi tidak misleading.
+    // score += 0.0;
 
     // Holder distribution (estimasi dari buy pressure, max 10)
     score += (buy_pressure * 10.0).min(10.0);

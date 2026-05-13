@@ -2,6 +2,7 @@
 // WALLET MANAGER - Jupiter API V6 Swap Integration
 // ============================================================
 
+use ed25519_dalek::{SigningKey, Signer};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -65,7 +66,7 @@ pub struct TokenAccountInfo {
 pub struct WalletManager {
     pub client: Client,
     pub public_key: String,
-    pub private_key_bytes: Vec<u8>,
+    private_key_bytes: Vec<u8>,
 }
 
 impl WalletManager {
@@ -177,9 +178,6 @@ impl WalletManager {
     }
 
     /// BUY token menggunakan Jupiter V6
-    /// token_address: mint address token yang dibeli
-    /// amount_in_sol: jumlah SOL yang digunakan
-    /// slippage: persentase slippage (contoh: 1.0 = 1%)
     pub async fn buy_token(
         &self,
         token_address: &str,
@@ -203,10 +201,7 @@ impl WalletManager {
                 }
                 Err(e) => {
                     last_error = e.clone();
-                    println!(
-                        "[BUY] Gagal attempt {}/{}: {}",
-                        attempt, MAX_RETRY, e
-                    );
+                    println!("[BUY] Gagal attempt {}/{}: {}", attempt, MAX_RETRY, e);
                     if attempt < MAX_RETRY {
                         sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
                     }
@@ -222,7 +217,6 @@ impl WalletManager {
         amount_lamports: u64,
         slippage_bps: u32,
     ) -> Result<String, String> {
-        // Step 1: Dapatkan quote dari Jupiter
         let quote = self.get_quote(
             SOL_MINT,
             token_address,
@@ -240,33 +234,24 @@ impl WalletManager {
             quote.out_amount, price_impact
         );
 
-        // Step 2: Build swap transaction
         let swap_tx = self.build_swap_transaction(&quote).await?;
-
-        // Step 3: Sign dan kirim transaction
         let signature = self.sign_and_send_transaction(&swap_tx).await?;
-
         Ok(signature)
     }
 
     /// SELL token menggunakan Jupiter V6
-    /// token_address: mint address token yang dijual
-    /// percentage_to_sell: persentase posisi yang dijual (100.0 = jual semua)
-    /// slippage: persentase slippage
     pub async fn sell_token(
         &self,
         token_address: &str,
         percentage_to_sell: f64,
         slippage: f64,
     ) -> Result<String, String> {
-        // Ambil balance token saat ini
         let token_balance = self.get_token_balance(token_address).await?;
 
         if token_balance <= 0.0 {
             return Err(format!("Tidak ada balance token {}", token_address));
         }
 
-        // Hitung decimals untuk konversi ke raw amount
         let decimals = self.get_token_decimals(token_address).await.unwrap_or(6);
         let sell_amount = token_balance * (percentage_to_sell / 100.0);
         let sell_raw = (sell_amount * 10f64.powi(decimals as i32)) as u64;
@@ -290,10 +275,7 @@ impl WalletManager {
                 }
                 Err(e) => {
                     last_error = e.clone();
-                    println!(
-                        "[SELL] Gagal attempt {}/{}: {}",
-                        attempt, MAX_RETRY, e
-                    );
+                    println!("[SELL] Gagal attempt {}/{}: {}", attempt, MAX_RETRY, e);
                     if attempt < MAX_RETRY {
                         sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
                     }
@@ -327,7 +309,6 @@ impl WalletManager {
         Ok(signature)
     }
 
-    /// Dapatkan quote dari Jupiter V6
     async fn get_quote(
         &self,
         input_mint: &str,
@@ -357,7 +338,6 @@ impl WalletManager {
             .map_err(|e| format!("Parse quote gagal: {}", e))
     }
 
-    /// Build swap transaction dari Jupiter
     async fn build_swap_transaction(&self, quote: &JupiterQuote) -> Result<String, String> {
         let request = SwapRequest {
             quote_response: quote.clone(),
@@ -395,14 +375,10 @@ impl WalletManager {
             .decode(base64_tx)
             .map_err(|e| format!("Decode base64 transaction gagal: {}", e))?;
 
-        // Sign menggunakan ed25519-dalek
         let signature_bytes = sign_transaction(&tx_bytes, &self.private_key_bytes)?;
-
-        // Inject signature ke dalam transaction
         let signed_tx = inject_signature(tx_bytes, signature_bytes)?;
         let signed_b64 = general_purpose::STANDARD.encode(&signed_tx);
 
-        // Kirim ke RPC
         let rpc_url = std::env::var("SOLANA_RPC_URL")
             .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
 
@@ -442,7 +418,6 @@ impl WalletManager {
         Ok(signature)
     }
 
-    /// Ambil decimals token dari RPC
     async fn get_token_decimals(&self, token_mint: &str) -> Result<u8, String> {
         let rpc_url = std::env::var("SOLANA_RPC_URL")
             .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
@@ -472,17 +447,20 @@ impl WalletManager {
 // CRYPTO HELPERS
 // ============================================================
 
+/// Decode base58 string ke Vec<u8>
 fn bs58_decode(input: &str) -> Result<Vec<u8>, String> {
-    let alphabet = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     let mut result: Vec<u8> = Vec::new();
-    let mut leading_zeros = 0;
+    let mut leading_zeros = 0usize;
 
     for ch in input.chars() {
         if ch == '1' && result.is_empty() {
             leading_zeros += 1;
             continue;
         }
-        let digit = alphabet.iter().position(|&b| b == ch as u8)
+        let digit = ALPHABET
+            .iter()
+            .position(|&b| b == ch as u8)
             .ok_or_else(|| format!("Karakter tidak valid di base58: '{}'", ch))? as u64;
 
         let mut carry = digit;
@@ -502,84 +480,11 @@ fn bs58_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
-fn derive_public_key(private_key_bytes: &[u8]) -> Result<String, String> {
-    // Ed25519: ambil 32 byte pertama sebagai seed
-    if private_key_bytes.len() < 32 {
-        return Err("Private key terlalu pendek".to_string());
-    }
-
-    // Gunakan sha512 untuk expand seed (sesuai Ed25519 spec)
-    use sha2::{Sha512, Digest};
-    let mut hasher = Sha512::new();
-    hasher.update(&private_key_bytes[..32]);
-    let hash = hasher.finalize();
-
-    let mut scalar = [0u8; 32];
-    scalar.copy_from_slice(&hash[..32]);
-    scalar[0] &= 248;
-    scalar[31] &= 127;
-    scalar[31] |= 64;
-
-    // Derive public key (simplified - menggunakan fixed point multiplication)
-    // Untuk produksi gunakan library ed25519-dalek yang proper
-    let pubkey_bytes = derive_ed25519_pubkey(&scalar);
-
-    // Encode ke base58
-    Ok(bs58_encode(&pubkey_bytes))
-}
-
-fn derive_ed25519_pubkey(scalar: &[u8; 32]) -> [u8; 32] {
-    // Placeholder: gunakan ed25519-dalek untuk implementasi proper
-    // Dalam produksi, ini menggunakan scalar multiplication dengan base point
-    let mut pubkey = [0u8; 32];
-    // Simulasi dengan SHA256 dari scalar (HANYA UNTUK STRUKTUR - ganti dengan ed25519 proper)
-    use sha2::{Sha256, Digest};
-    let mut h = Sha256::new();
-    h.update(scalar);
-    h.update(b"ed25519_pubkey_derivation");
-    let result = h.finalize();
-    pubkey.copy_from_slice(&result);
-    pubkey
-}
-
-fn sign_transaction(tx_bytes: &[u8], private_key_bytes: &[u8]) -> Result<[u8; 64], String> {
-    if private_key_bytes.len() < 64 {
-        return Err("Private key bytes tidak cukup untuk signing".to_string());
-    }
-    // Menggunakan 64-byte keypair (seed + pubkey)
-    // Dalam implementasi nyata gunakan ed25519-dalek:
-    // let keypair = ed25519_dalek::SigningKey::from_bytes(&private_key_bytes[..32]);
-    // let signature = keypair.sign(tx_bytes);
-    // signature.to_bytes()
-
-    // Placeholder signature structure
-    let mut sig = [0u8; 64];
-    use sha2::{Sha512, Digest};
-    let mut h = Sha512::new();
-    h.update(&private_key_bytes[..32]);
-    h.update(tx_bytes);
-    let hash = h.finalize();
-    sig.copy_from_slice(&hash[..64]);
-    Ok(sig)
-}
-
-fn inject_signature(mut tx_bytes: Vec<u8>, signature: [u8; 64]) -> Result<Vec<u8>, String> {
-    // Solana versioned transaction: byte pertama = num signatures
-    if tx_bytes.is_empty() {
-        return Err("Transaction bytes kosong".to_string());
-    }
-    // Inject signature di posisi yang benar (offset 1 = setelah num_signatures byte)
-    if tx_bytes.len() > 65 {
-        tx_bytes[1..65].copy_from_slice(&signature);
-    }
-    Ok(tx_bytes)
-}
-
+/// Encode bytes ke base58 string
 fn bs58_encode(bytes: &[u8]) -> String {
-    let alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    let alpha_bytes: Vec<char> = alphabet.chars().collect();
-    let mut result = Vec::new();
-    let mut leading_zeros = 0;
+    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let mut result: Vec<u8> = Vec::new();
+    let mut leading_zeros = 0usize;
 
     for &byte in bytes {
         if byte == 0 && result.is_empty() {
@@ -603,8 +508,106 @@ fn bs58_encode(bytes: &[u8]) -> String {
         output.push('1');
     }
     for &digit in result.iter().rev() {
-        output.push(alpha_bytes[digit as usize]);
+        output.push(ALPHABET[digit as usize] as char);
     }
     output
 }
 
+/// Derive Solana public key dari 32-byte seed menggunakan Ed25519
+fn derive_public_key(private_key_bytes: &[u8]) -> Result<String, String> {
+    if private_key_bytes.len() < 32 {
+        return Err("Private key terlalu pendek: butuh minimal 32 byte".to_string());
+    }
+
+    let seed: [u8; 32] = private_key_bytes[..32]
+        .try_into()
+        .map_err(|_| "Gagal konversi seed ke array 32 byte".to_string())?;
+
+    let signing_key = SigningKey::from_bytes(&seed);
+    let verifying_key = signing_key.verifying_key();
+
+    Ok(bs58_encode(verifying_key.as_bytes()))
+}
+
+/// Decode compact-u16 dari awal bytes, kembalikan (nilai, jumlah_byte_dipakai)
+fn decode_compact_u16(bytes: &[u8]) -> Result<(usize, usize), String> {
+    if bytes.is_empty() {
+        return Err("Bytes kosong untuk decode compact-u16".to_string());
+    }
+
+    let b0 = bytes[0] as usize;
+    if b0 <= 0x7f {
+        return Ok((b0, 1));
+    }
+
+    if bytes.len() < 2 {
+        return Err("Compact-u16 terpotong (butuh 2 byte)".to_string());
+    }
+    let b1 = bytes[1] as usize;
+    if b1 <= 0x7f {
+        return Ok(((b0 & 0x7f) | (b1 << 7), 2));
+    }
+
+    if bytes.len() < 3 {
+        return Err("Compact-u16 terpotong (butuh 3 byte)".to_string());
+    }
+    let b2 = bytes[2] as usize;
+    Ok(((b0 & 0x7f) | ((b1 & 0x7f) << 7) | (b2 << 14), 3))
+}
+
+/// Sign transaction dengan Ed25519 menggunakan private key.
+/// Solana transaction format: [compact-u16 num_sigs][sig slots][message]
+/// Hanya message bytes yang ditandatangani (setelah signature slots).
+fn sign_transaction(tx_bytes: &[u8], private_key_bytes: &[u8]) -> Result<[u8; 64], String> {
+    if private_key_bytes.len() < 32 {
+        return Err("Private key terlalu pendek untuk signing".to_string());
+    }
+
+    // Parse jumlah signature dari compact-u16 di awal
+    let (num_sigs, prefix_len) = decode_compact_u16(tx_bytes)?;
+
+    // Message dimulai setelah: prefix compact-u16 + (num_sigs * 64 bytes slot signature)
+    let message_start = prefix_len + num_sigs * 64;
+
+    if tx_bytes.len() <= message_start {
+        return Err(format!(
+            "Transaction terlalu pendek: {} bytes, message mulai di offset {}",
+            tx_bytes.len(), message_start
+        ));
+    }
+
+    let message_bytes = &tx_bytes[message_start..];
+
+    let seed: [u8; 32] = private_key_bytes[..32]
+        .try_into()
+        .map_err(|_| "Gagal konversi seed ke array 32 byte".to_string())?;
+
+    let signing_key = SigningKey::from_bytes(&seed);
+    let signature = signing_key.sign(message_bytes);
+
+    Ok(signature.to_bytes())
+}
+
+/// Inject signature ke slot pertama dalam Solana transaction.
+/// Format: [compact-u16 num_sigs][64-byte sig slot 0][...sisa...]
+fn inject_signature(mut tx_bytes: Vec<u8>, signature: [u8; 64]) -> Result<Vec<u8>, String> {
+    if tx_bytes.is_empty() {
+        return Err("Transaction bytes kosong".to_string());
+    }
+
+    let (_, prefix_len) = decode_compact_u16(&tx_bytes)?;
+
+    // Signature pertama dimulai tepat setelah compact-u16 prefix
+    let sig_start = prefix_len;
+    let sig_end = sig_start + 64;
+
+    if tx_bytes.len() < sig_end {
+        return Err(format!(
+            "Transaction terlalu pendek untuk inject signature: {} bytes (butuh minimal {})",
+            tx_bytes.len(), sig_end
+        ));
+    }
+
+    tx_bytes[sig_start..sig_end].copy_from_slice(&signature);
+    Ok(tx_bytes)
+}

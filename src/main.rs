@@ -37,10 +37,6 @@ use std::fs;
 // ============================================================
 // CONFIG - ضع مفاتيحك هنا / Konfigurasi Bot
 // ============================================================
-const HELIUS_API_KEY: &str        = "0a47e81d-8e80-4aed-8505-5e5176f3540f";
-const TELEGRAM_BOT_TOKEN: &str    = "7839767838:AAGbRydF792cf8fue_HkUNnNUzVWWdrB-3I";
-const TELEGRAM_CHAT_ID: &str      = "2010797927";
-
 const SCAN_INTERVAL_SECS: u64     = 30;
 const PROFIT_CHECK_INTERVAL_SECS: u64 = 300;
 const SELL_CHECK_INTERVAL_SECS: u64   = 60;   // Cek posisi setiap 60 detik
@@ -522,6 +518,12 @@ struct SolanaBot {
     last_save: DateTime<Utc>,
     is_paused: bool,
 
+    // Config dari environment
+    helius_api_key: String,
+    telegram_token: String,
+    telegram_chat_id: String,
+    sol_price_usd: f64,
+
     // === FITUR BARU: Live Trading ===
     positions: HashMap<String, Position>,
     trading_config: TradingConfig,
@@ -538,6 +540,18 @@ impl SolanaBot {
     fn new() -> Self {
         // Load .env jika ada
         let _ = dotenv::dotenv();
+
+        // Baca konfigurasi wajib dari environment (panic dengan pesan jelas jika tidak ada)
+        let helius_api_key = std::env::var("HELIUS_API_KEY")
+            .expect("HELIUS_API_KEY wajib diset di .env (lihat .env.example)");
+        let telegram_token = std::env::var("TELEGRAM_BOT_TOKEN")
+            .expect("TELEGRAM_BOT_TOKEN wajib diset di .env (lihat .env.example)");
+        let telegram_chat_id = std::env::var("TELEGRAM_CHAT_ID")
+            .expect("TELEGRAM_CHAT_ID wajib diset di .env (lihat .env.example)");
+        let sol_price_usd: f64 = std::env::var("SOL_PRICE_USD")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(170.0);
 
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -603,6 +617,10 @@ impl SolanaBot {
             tg_limiter: RateLimiter::new(20, 60),
             last_save: Utc::now(),
             is_paused: false,
+            helius_api_key,
+            telegram_token,
+            telegram_chat_id,
+            sol_price_usd,
             positions: HashMap::new(),
             trading_config,
             wallet,
@@ -682,9 +700,9 @@ impl SolanaBot {
 
     async fn send_message(&mut self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.tg_limiter.wait_if_needed().await;
-        let url = format!("https://api.telegram.org/bot{}/sendMessage", TELEGRAM_BOT_TOKEN);
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.telegram_token);
         let payload = TelegramMsg {
-            chat_id: TELEGRAM_CHAT_ID.to_string(),
+            chat_id: self.telegram_chat_id.clone(),
             text: text.to_string(),
             parse_mode: "Markdown".to_string(),
             disable_web_page_preview: true,
@@ -699,9 +717,9 @@ impl SolanaBot {
 
     async fn send_photo(&mut self, photo_url: &str, caption: &str) {
         self.tg_limiter.wait_if_needed().await;
-        let url = format!("https://api.telegram.org/bot{}/sendPhoto", TELEGRAM_BOT_TOKEN);
+        let url = format!("https://api.telegram.org/bot{}/sendPhoto", self.telegram_token);
         let payload = TelegramPhoto {
-            chat_id: TELEGRAM_CHAT_ID.to_string(),
+            chat_id: self.telegram_chat_id.clone(),
             photo: photo_url.to_string(),
             caption: caption.to_string(),
             parse_mode: "Markdown".to_string(),
@@ -713,9 +731,9 @@ impl SolanaBot {
 
     async fn send_alert_with_buttons(&mut self, text: &str, dex_url: &str) {
         self.tg_limiter.wait_if_needed().await;
-        let url = format!("https://api.telegram.org/bot{}/sendMessage", TELEGRAM_BOT_TOKEN);
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.telegram_token);
         let payload = TelegramInlineKeyboard {
-            chat_id: TELEGRAM_CHAT_ID.to_string(),
+            chat_id: self.telegram_chat_id.clone(),
             text: text.to_string(),
             parse_mode: "Markdown".to_string(),
             reply_markup: InlineKeyboardMarkup {
@@ -821,7 +839,7 @@ impl SolanaBot {
     async fn get_token_metadata(&mut self, address: &str) -> Option<HeliusTokenInfo> {
         self.helius_limiter.wait_if_needed().await;
         let url = format!(
-            "https://api.helius.xyz/v0/token-metadata?api-key={}", HELIUS_API_KEY
+            "https://api.helius.xyz/v0/token-metadata?api-key={}", self.helius_api_key
         );
         let body = serde_json::json!({ "mintAccounts": [address] });
         match self.client.post(&url).json(&body).send().await {
@@ -860,7 +878,7 @@ impl SolanaBot {
         self.helius_limiter.wait_if_needed().await;
         let url = format!(
             "https://api.helius.xyz/v1/token-holders?api-key={}&mint={}&limit=50",
-            HELIUS_API_KEY, address
+            self.helius_api_key, address
         );
         match self.client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
@@ -874,7 +892,7 @@ impl SolanaBot {
         self.helius_limiter.wait_if_needed().await;
         let url = format!(
             "https://api.helius.xyz/v0/addresses/{}/transactions?api-key={}&type=SWAP&limit=100",
-            address, HELIUS_API_KEY
+            address, self.helius_api_key
         );
         match self.client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
@@ -1515,7 +1533,7 @@ impl SolanaBot {
                     println!("[AUTO BUY] ✅ SUKSES! TX: {}", signature);
 
                     // Estimasi token yang diterima (pakai price USD)
-                    let sol_price_usd = 170.0; // TODO: ambil dari API
+                    let sol_price_usd = self.sol_price_usd;
                     let token_amount = if signal.current_price_usd > 0.0 {
                         (amount_sol * sol_price_usd) / signal.current_price_usd
                     } else { 0.0 };
@@ -1715,7 +1733,7 @@ impl SolanaBot {
 
         if let BuyDecision::Buy { amount_sol, .. } = decision {
             let price = signal.current_price_usd;
-            let sol_price_usd = 170.0;
+            let sol_price_usd = self.sol_price_usd;
             let token_amount = if price > 0.0 { (amount_sol * sol_price_usd) / price } else { 0.0 };
 
             match self.paper_state.execute_buy(
