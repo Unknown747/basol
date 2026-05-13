@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "rust-stable"]
+modules = ["rust-stable", "nodejs-20", "web"]
 
 [deployment]
 router = "application"
@@ -32,7 +32,7 @@ args = "cargo run 2>&1"
 outputType = "console"
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
@@ -46,3 +46,6 @@ externalPort = 8080
 [[ports]]
 localPort = 8081
 externalPort = 80
+
+[nix]
+channel = "stable-25_05"
