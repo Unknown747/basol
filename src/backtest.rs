@@ -675,10 +675,12 @@ pub struct CompareScenario {
 fn build_trading_config(
     tp: f64, sl: f64, trail_start: f64, trail_dist: f64, min_score: f64,
 ) -> TradingConfig {
+    let max_pos = std::env::var("MAX_POSITION_SOL")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(0.5_f64);
     TradingConfig {
         trading_enabled: true,
-        max_position_sol: std::env::var("MAX_POSITION_SOL")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.5),
+        max_position_sol: max_pos,
+        min_position_sol: (max_pos * 0.1_f64).max(0.01_f64),
         take_profit_percent: tp,
         stop_loss_percent: sl,
         trailing_start_percent: trail_start,
@@ -688,6 +690,8 @@ fn build_trading_config(
             .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0),
         default_slippage: 1.0,
         max_positions: 999, // tidak ada batas di backtest
+        max_hold_minutes: 0,
+        time_exit_threshold_pct: 5.0,
     }
 }
 

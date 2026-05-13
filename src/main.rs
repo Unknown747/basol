@@ -1575,7 +1575,7 @@ impl SolanaBot {
         let decision = evaluate_buy_signal(&signal, &self.trading_config, &self.positions);
         log_buy_decision(&signal, &decision);
 
-        if let BuyDecision::Buy { amount_sol, reason } = decision {
+        if let BuyDecision::Buy { amount_sol, reason, .. } = decision {
             println!("[AUTO BUY] Eksekusi buy {} - {:.4} SOL | {}", signal.symbol, amount_sol, reason);
 
             // Cek saldo wallet
@@ -1783,34 +1783,45 @@ impl SolanaBot {
             })
             .collect();
 
+        let slippage = self.paper_config.default_slippage;
+
         let config = TradingConfig {
             trading_enabled: true,
             max_position_sol: self.paper_config.max_position_sol,
+            min_position_sol: (self.paper_config.max_position_sol * 0.1_f64).max(0.01_f64),
             take_profit_percent: self.paper_config.take_profit_percent,
             stop_loss_percent: self.paper_config.stop_loss_percent,
             trailing_start_percent: self.paper_config.trailing_start_percent,
             trailing_distance_percent: self.paper_config.trailing_distance_percent,
             min_score_to_buy: self.paper_config.min_score_to_buy,
             min_liquidity_usd: self.paper_config.min_liquidity_usd,
-            default_slippage: 1.0,
+            default_slippage: slippage,
             max_positions: self.paper_config.max_positions,
+            max_hold_minutes: 0,
+            time_exit_threshold_pct: 5.0,
         };
 
         let decision = evaluate_buy_signal(&signal, &config, &paper_positions_snapshot);
         log_buy_decision(&signal, &decision);
 
         if let BuyDecision::Buy { amount_sol, .. } = decision {
-            let price = signal.current_price_usd;
+            let quoted_price = signal.current_price_usd;
             let sol_price_usd = self.sol_price_usd;
-            let token_amount = if price > 0.0 { (amount_sol * sol_price_usd) / price } else { 0.0 };
+
+            // Hitung price impact sebelum execute_buy (untuk ditampilkan di notifikasi)
+            let price_impact = PaperTradingState::calc_price_impact_pct(
+                amount_sol, signal.liquidity_usd, sol_price_usd,
+            );
+            let effective_price = quoted_price * (1.0 + (slippage + price_impact) / 100.0);
 
             match self.paper_state.execute_buy(
                 signal.token_address.clone(),
                 signal.symbol.clone(),
                 signal.name.clone(),
-                price,
+                quoted_price,
                 amount_sol,
-                token_amount,
+                slippage,
+                sol_price_usd,
                 signal.total_score,
                 signal.liquidity_usd,
             ) {
@@ -1820,7 +1831,10 @@ impl SolanaBot {
                         &signal.name,
                         &signal.token_address,
                         amount_sol,
-                        price,
+                        quoted_price,
+                        effective_price,
+                        slippage,
+                        price_impact,
                         signal.total_score,
                         self.paper_state.current_balance_sol,
                         self.paper_state.positions.len(),
@@ -1881,7 +1895,7 @@ impl SolanaBot {
 
         // Eksekusi sell paper
         for (addr, reason, sell_price) in to_sell {
-            match self.paper_state.execute_sell(&addr, sell_price, 100.0, reason) {
+            match self.paper_state.execute_sell(&addr, sell_price, 100.0, self.paper_config.default_slippage, reason) {
                 Ok(trade) => {
                     let balance = self.paper_state.current_balance_sol;
                     let msg = format_paper_sell_notification(&trade, balance);

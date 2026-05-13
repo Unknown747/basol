@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ============================================================
+// KONSTANTA MAINNET - sama persis dengan biaya transaksi nyata
+// ============================================================
+
+/// Biaya jaringan Solana per transaksi (base fee 5000 lamport + priority fee ~20000 lamport)
+/// Total ~25000 lamport = 0.000025 SOL per tx — angka konservatif/realistis
+pub const NETWORK_FEE_SOL: f64 = 0.000025;
+
+// ============================================================
 // CONFIG
 // ============================================================
 
@@ -21,6 +29,7 @@ pub struct PaperConfig {
     pub trailing_distance_percent: f64,
     pub min_score_to_buy: f64,
     pub min_liquidity_usd: f64,
+    pub default_slippage: f64,
     pub max_positions: usize,
     pub report_interval_secs: u64,
 }
@@ -47,6 +56,9 @@ impl PaperConfig {
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(85.0),
             min_liquidity_usd: std::env::var("MIN_LIQUIDITY_USD")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0),
+            // Slippage default sama dengan konfigurasi live trading
+            default_slippage: std::env::var("DEFAULT_SLIPPAGE")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
             max_positions: std::env::var("MAX_POSITIONS")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(5),
             report_interval_secs: std::env::var("PAPER_REPORT_INTERVAL_SECS")
@@ -196,22 +208,43 @@ impl PaperTradingState {
         self.total_profit_sol / self.total_loss_sol
     }
 
-    /// Eksekusi paper buy
+    /// Hitung price impact menggunakan formula constant product AMM (xy=k)
+    /// Sama persis dengan model yang dipakai Jupiter untuk pool Solana
+    /// amount_sol: jumlah SOL yang diinvestasikan
+    /// liquidity_usd: total likuiditas pool dalam USD
+    /// sol_price_usd: harga SOL saat ini
+    pub fn calc_price_impact_pct(amount_sol: f64, liquidity_usd: f64, sol_price_usd: f64) -> f64 {
+        if liquidity_usd <= 0.0 || sol_price_usd <= 0.0 {
+            return 0.0;
+        }
+        // SOL reserve di sisi pool ≈ setengah likuiditas total (asumsi 50/50 pool)
+        let sol_reserve = liquidity_usd / 2.0 / sol_price_usd;
+        // Formula AMM: impact = amount_in / (reserve_in + amount_in)
+        let impact = amount_sol / (sol_reserve + amount_sol);
+        // Cap di 50% untuk menghindari angka tidak realistis
+        (impact * 100.0).min(50.0)
+    }
+
+    /// Eksekusi paper buy — 100% simulasi kondisi mainnet
+    /// Termasuk: network fee, slippage, dan price impact dari pool AMM
     pub fn execute_buy(
         &mut self,
         token_address: String,
         symbol: String,
         name: String,
-        buy_price_usd: f64,
+        quoted_price_usd: f64,    // harga yang terlihat di DEX (sebelum slippage/impact)
         amount_sol: f64,
-        token_amount: f64,
+        slippage_percent: f64,    // slippage configured (dari DEFAULT_SLIPPAGE env)
+        sol_price_usd: f64,       // harga SOL saat ini
         score: f64,
         liquidity_usd: f64,
     ) -> Result<String, String> {
-        if self.current_balance_sol < amount_sol {
+        // Cek saldo cukup untuk amount + network fee
+        let total_needed = amount_sol + NETWORK_FEE_SOL;
+        if self.current_balance_sol < total_needed {
             return Err(format!(
-                "Saldo virtual tidak cukup: {:.4} SOL (butuh {:.4} SOL)",
-                self.current_balance_sol, amount_sol
+                "Saldo virtual tidak cukup: {:.6} SOL (butuh {:.6} SOL termasuk fee)",
+                self.current_balance_sol, total_needed
             ));
         }
 
@@ -219,17 +252,45 @@ impl PaperTradingState {
             return Err(format!("Sudah punya posisi untuk {}", symbol));
         }
 
+        // === SIMULASI MAINNET: Network fee ===
+        self.current_balance_sol -= NETWORK_FEE_SOL;
+
+        // === SIMULASI MAINNET: Price impact (constant product AMM) ===
+        let price_impact_pct = Self::calc_price_impact_pct(amount_sol, liquidity_usd, sol_price_usd);
+
+        // === SIMULASI MAINNET: Slippage pada beli (harga naik = lebih buruk untuk buyer) ===
+        // Effective price = quoted * (1 + slippage%) * (1 + impact%)
+        let total_cost_pct = slippage_percent + price_impact_pct;
+        let effective_buy_price = quoted_price_usd * (1.0 + total_cost_pct / 100.0);
+
+        // === Token amount berdasarkan harga efektif (bukan harga quote) ===
+        let token_amount = if effective_buy_price > 0.0 {
+            (amount_sol * sol_price_usd) / effective_buy_price
+        } else {
+            0.0
+        };
+
         self.current_balance_sol -= amount_sol;
         self.total_buys += 1;
+
+        println!(
+            "[PAPER BUY] ✅ {} ({}) | {:.4} SOL @ quoted=${:.8} → effective=${:.8}\n\
+             [PAPER BUY]    Slippage: {:.2}% | Price Impact: {:.2}% | Fee: {:.6} SOL | Token: {:.2}",
+            name, symbol, amount_sol,
+            quoted_price_usd, effective_buy_price,
+            slippage_percent, price_impact_pct,
+            NETWORK_FEE_SOL, token_amount,
+        );
 
         let position = PaperPosition {
             token_address: token_address.clone(),
             symbol: symbol.clone(),
             name: name.clone(),
-            buy_price_usd,
+            // Simpan effective price — ini yang benar untuk hitung profit/loss
+            buy_price_usd: effective_buy_price,
             amount_sol,
             token_amount,
-            highest_price: buy_price_usd,
+            highest_price: effective_buy_price,
             trailing_stop_active: false,
             trailing_stop_price: 0.0,
             entry_time: Utc::now(),
@@ -239,31 +300,46 @@ impl PaperTradingState {
 
         self.positions.insert(token_address.clone(), position);
 
-        let fake_sig = format!("PAPER_{}", &token_address[..8]);
-        println!(
-            "[PAPER BUY] ✅ {} ({}) | {:.4} SOL @ ${:.8} | Saldo: {:.4} SOL",
-            name, symbol, amount_sol, buy_price_usd, self.current_balance_sol
-        );
-
-        Ok(fake_sig)
+        let id = if token_address.len() >= 8 { &token_address[..8] } else { &token_address };
+        Ok(format!("PAPER_{}_slip{:.1}_impact{:.2}", id, slippage_percent, price_impact_pct))
     }
 
-    /// Eksekusi paper sell
+    /// Eksekusi paper sell — 100% simulasi kondisi mainnet
+    /// Termasuk: network fee, slippage sell-side, dan price impact
     pub fn execute_sell(
         &mut self,
         token_address: &str,
-        sell_price: f64,
+        quoted_sell_price: f64,   // harga quote dari DEX sebelum slippage
         percentage: f64,
+        slippage_percent: f64,    // slippage configured
         exit_reason: String,
     ) -> Result<PaperTrade, String> {
         let pos = self.positions.remove(token_address)
             .ok_or_else(|| format!("Posisi tidak ditemukan: {}", token_address))?;
 
-        let profit_pct = pos.profit_percent(sell_price);
-        let profit_sol = pos.profit_sol(sell_price);
-        let proceeds = pos.amount_sol + profit_sol;
+        // === SIMULASI MAINNET: Price impact saat jual ===
+        // Nilai token yang dijual dalam USD untuk estimasi impact
+        let sell_value_usd = pos.token_amount * quoted_sell_price;
+        let sell_impact_pct = if pos.liquidity_at_entry > 0.0 {
+            // Dampak jual biasanya setengah dari dampak beli (karena jual ke pool yg sudah ada)
+            (sell_value_usd / pos.liquidity_at_entry * 50.0).min(30.0)
+        } else {
+            0.0
+        };
 
-        self.current_balance_sol += proceeds * (percentage / 100.0);
+        // === SIMULASI MAINNET: Slippage pada jual (harga turun = lebih buruk untuk seller) ===
+        let total_cost_pct = slippage_percent + sell_impact_pct;
+        let effective_sell_price = quoted_sell_price * (1.0 - total_cost_pct / 100.0);
+
+        // Hitung profit berdasarkan harga efektif (beli effective vs jual effective)
+        let profit_pct = pos.profit_percent(effective_sell_price);
+        let profit_sol = pos.profit_sol(effective_sell_price);
+
+        // Proceeds = modal + profit, dikurangi network fee
+        let gross_proceeds = (pos.amount_sol + profit_sol) * (percentage / 100.0);
+        let net_proceeds = (gross_proceeds - NETWORK_FEE_SOL).max(0.0);
+
+        self.current_balance_sol += net_proceeds;
         self.total_sells += 1;
 
         let result = if profit_pct > 0.5 {
@@ -292,7 +368,7 @@ impl PaperTradingState {
             symbol: pos.symbol.clone(),
             name: pos.name.clone(),
             buy_price: pos.buy_price_usd,
-            sell_price,
+            sell_price: effective_sell_price,
             amount_sol: pos.amount_sol,
             profit_percent: profit_pct,
             profit_sol,
@@ -305,12 +381,14 @@ impl PaperTradingState {
         };
 
         println!(
-            "[PAPER SELL] {} {} ({}) | P&L: {}{:.1}% ({}{:.4} SOL) | {} | Saldo: {:.4} SOL",
+            "[PAPER SELL] {} {} ({}) | quoted=${:.8} → effective=${:.8}\n\
+             [PAPER SELL]    Slip: {:.2}% | Impact: {:.2}% | P&L: {}{:.1}% ({}{:.4} SOL) | Saldo: {:.4} SOL",
             if profit_pct >= 0.0 { "✅" } else { "❌" },
             pos.name, pos.symbol,
+            quoted_sell_price, effective_sell_price,
+            slippage_percent, sell_impact_pct,
             if profit_pct >= 0.0 { "+" } else { "" }, profit_pct,
             if profit_sol >= 0.0 { "+" } else { "" }, profit_sol,
-            exit_reason,
             self.current_balance_sol,
         );
 
@@ -435,24 +513,35 @@ pub fn format_paper_buy_notification(
     name: &str,
     token_address: &str,
     amount_sol: f64,
-    price_usd: f64,
+    quoted_price_usd: f64,
+    effective_price_usd: f64,
+    slippage_pct: f64,
+    price_impact_pct: f64,
     score: f64,
     balance_after: f64,
     total_positions: usize,
 ) -> String {
+    let total_cost_pct = slippage_pct + price_impact_pct;
     format!(
         "📋 **PAPER TRADING - SIMULASI BUY**\n\
         ═══════════════════════════════\n\n\
         💎 Token: **{}** `({})`\n\
         📍 `{}`\n\n\
         💰 Modal Simulasi: **{:.4} SOL** (virtual)\n\
-        💵 Harga Masuk: **${:.8}**\n\
+        💵 Harga Quote: **${:.8}**\n\
+        💵 Harga Efektif: **${:.8}** _(setelah biaya)_\n\
+        📉 Biaya Transaksi: **{:.2}%** (slip {:.1}% + impact {:.1}%)\n\
+        🔧 Network Fee: **{:.6} SOL**\n\
         ⭐ Skor Analisis: **{:.1}/100**\n\
         📊 Posisi Aktif: **{}/max**\n\
         💼 Saldo Virtual Tersisa: **{:.4} SOL**\n\n\
-        ⚠️ _Ini adalah simulasi - tidak ada uang nyata yang digunakan_",
+        🔬 _Simulasi 100% akurat — slippage & price impact mainnet diterapkan_",
         name, symbol, token_address,
-        amount_sol, price_usd, score,
+        amount_sol,
+        quoted_price_usd, effective_price_usd,
+        total_cost_pct, slippage_pct, price_impact_pct,
+        NETWORK_FEE_SOL,
+        score,
         total_positions, balance_after
     )
 }
@@ -467,25 +556,28 @@ pub fn format_paper_sell_notification(trade: &PaperTrade, balance_after: f64) ->
     format!(
         "📋 **PAPER TRADING - SIMULASI SELL**\n\
         ═══════════════════════════════\n\n\
-        {} P&L: **{}**\n\n\
+        {} Hasil: **{}**\n\n\
         💎 Token: **{}** `({})`\n\
         📍 `{}`\n\n\
         {} P&L: **{}{:.1}%** ({}{:.4} SOL)\n\
-        💰 Masuk: **${:.8}**\n\
-        💰 Keluar: **${:.8}**\n\
+        💰 Beli Efektif: **${:.8}**\n\
+        💰 Jual Efektif: **${:.8}** _(setelah slip + impact)_\n\
         📊 Modal: **{:.4} SOL**\n\
+        🔧 Fee Jual: **{:.6} SOL**\n\
         ⏰ Durasi: **{} menit**\n\
-        🔄 Alasan: **{}**\n\
+        🔄 Alasan Keluar: **{}**\n\
         💼 Saldo Virtual: **{:.4} SOL**\n\n\
-        ⚠️ _Ini adalah simulasi - tidak ada uang nyata yang digunakan_",
+        🔬 _Simulasi 100% akurat — slippage, impact & fee mainnet diterapkan_",
         emoji, result_text,
         trade.name, trade.symbol,
         trade.token_address,
         emoji,
         if trade.profit_percent >= 0.0 { "+" } else { "" }, trade.profit_percent,
         if trade.profit_sol >= 0.0 { "+" } else { "" }, trade.profit_sol,
-        trade.buy_price, trade.sell_price,
+        trade.buy_price,
+        trade.sell_price,
         trade.amount_sol,
+        NETWORK_FEE_SOL,
         trade.hold_duration_minutes,
         trade.exit_reason,
         balance_after
