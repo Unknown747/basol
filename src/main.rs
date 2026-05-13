@@ -1,5 +1,5 @@
 // ============================================================
-// بوت تحليل Solana المتقدم - مع ميزة Auto Buy/Auto Sell
+// Solana Token Analysis Bot - Auto Buy/Auto Sell
 // ============================================================
 
 mod positions;
@@ -35,12 +35,12 @@ use chrono::{DateTime, Utc};
 use std::fs;
 
 // ============================================================
-// CONFIG - ضع مفاتيحك هنا / Konfigurasi Bot
+// CONFIG - Bot configuration constants
 // ============================================================
 const SCAN_INTERVAL_SECS: u64          = 30;
 const PROFIT_CHECK_INTERVAL_SECS: u64  = 300;
-const SELL_CHECK_INTERVAL_SECS: u64    = 60;    // Cek posisi setiap 60 detik
-const SOL_PRICE_UPDATE_INTERVAL_SECS: u64 = 300; // Refresh harga SOL setiap 5 menit
+const SELL_CHECK_INTERVAL_SECS: u64    = 60;    // Check positions every 60 seconds
+const SOL_PRICE_UPDATE_INTERVAL_SECS: u64 = 300; // Refresh SOL price every 5 minutes
 const SAVE_INTERVAL_MINS: i64     = 10;
 const MAX_TOKEN_AGE_HOURS: i64    = 6;
 const MIN_SCORE_NEW_TOKEN: f64    = 80.0;
@@ -282,13 +282,13 @@ enum LifecyclePhase {
 }
 
 impl LifecyclePhase {
-    fn to_arabic(&self) -> &str {
+    fn to_label(&self) -> &str {
         match self {
-            LifecyclePhase::Launch       => "⚡ مرحلة الإطلاق (خطيرة)",
-            LifecyclePhase::FirstDip     => "📉 التصحيح الأول (فرصة)",
-            LifecyclePhase::Accumulation => "🟢 مرحلة التجميع (مثالية)",
-            LifecyclePhase::Breakout     => "🔥 مرحلة الاختراق (متأخر)",
-            LifecyclePhase::Mature       => "⬜ ناضج (متأخر جداً)",
+            LifecyclePhase::Launch       => "⚡ Launch Phase (high risk)",
+            LifecyclePhase::FirstDip     => "📉 First Dip (opportunity)",
+            LifecyclePhase::Accumulation => "🟢 Accumulation Phase (ideal entry)",
+            LifecyclePhase::Breakout     => "🔥 Breakout Phase (late entry)",
+            LifecyclePhase::Mature       => "⬜ Mature (too late)",
         }
     }
 }
@@ -336,10 +336,10 @@ enum AlertLevel {
 impl AlertLevel {
     fn to_header(&self) -> &str {
         match self {
-            AlertLevel::Legendary => "👑 **فرصة أسطورية** 👑",
-            AlertLevel::Golden    => "💎 **فرصة ذهبية** 💎",
-            AlertLevel::Excellent => "🔥 **فرصة ممتازة** 🔥",
-            AlertLevel::Normal    => "⭐ **فرصة عادية** ⭐",
+            AlertLevel::Legendary => "👑 **LEGENDARY OPPORTUNITY** 👑",
+            AlertLevel::Golden    => "💎 **GOLDEN OPPORTUNITY** 💎",
+            AlertLevel::Excellent => "🔥 **EXCELLENT OPPORTUNITY** 🔥",
+            AlertLevel::Normal    => "⭐ **STANDARD OPPORTUNITY** ⭐",
         }
     }
 }
@@ -509,7 +509,7 @@ impl RateLimiter {
 }
 
 // ============================================================
-// MAIN BOT STRUCT - dengan integrasi Trading
+// MAIN BOT STRUCT - with trading integration
 // ============================================================
 
 struct SolanaBot {
@@ -521,20 +521,20 @@ struct SolanaBot {
     last_save: DateTime<Utc>,
     is_paused: bool,
 
-    // Config dari environment
+    // Config from environment
     helius_api_key: String,
     telegram_token: String,
     telegram_chat_id: String,
     sol_price_usd: f64,
     last_price_update: Instant,
 
-    // === FITUR BARU: Live Trading ===
+    // === Live Trading ===
     positions: HashMap<String, Position>,
     trading_config: TradingConfig,
     wallet: Option<WalletManager>,
     last_sell_check: Instant,
 
-    // === FITUR BARU: Paper Trading ===
+    // === Paper Trading ===
     paper_config: PaperConfig,
     paper_state: PaperTradingState,
     last_paper_report: Instant,
@@ -542,16 +542,16 @@ struct SolanaBot {
 
 impl SolanaBot {
     fn new() -> Self {
-        // Load .env jika ada
+        // Load .env if present
         let _ = dotenv::dotenv();
 
-        // Baca konfigurasi wajib dari environment (panic dengan pesan jelas jika tidak ada)
+        // Read required config from environment (panic with clear message if missing)
         let helius_api_key = std::env::var("HELIUS_API_KEY")
-            .expect("HELIUS_API_KEY wajib diset di .env (lihat .env.example)");
+            .expect("HELIUS_API_KEY must be set in .env (see .env.example)");
         let telegram_token = std::env::var("TELEGRAM_BOT_TOKEN")
-            .expect("TELEGRAM_BOT_TOKEN wajib diset di .env (lihat .env.example)");
+            .expect("TELEGRAM_BOT_TOKEN must be set in .env (see .env.example)");
         let telegram_chat_id = std::env::var("TELEGRAM_CHAT_ID")
-            .expect("TELEGRAM_CHAT_ID wajib diset di .env (lihat .env.example)");
+            .expect("TELEGRAM_CHAT_ID must be set in .env (see .env.example)");
         let sol_price_usd: f64 = std::env::var("SOL_PRICE_USD")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -565,27 +565,27 @@ impl SolanaBot {
 
         let trading_config = TradingConfig::from_env();
 
-        // Load wallet jika trading enabled
+        // Load wallet if trading is enabled
         let wallet = if trading_config.trading_enabled {
             match WalletManager::from_env() {
                 Ok(w) => {
-                    println!("[TRADING] Wallet berhasil diload: {}", w.public_key);
+                    println!("[TRADING] Wallet loaded successfully: {}", w.public_key);
                     Some(w)
                 }
                 Err(e) => {
-                    eprintln!("[TRADING] ⚠️ Gagal load wallet: {} - Trading dinonaktifkan", e);
+                    eprintln!("[TRADING] ⚠️ Failed to load wallet: {} — trading disabled", e);
                     None
                 }
             }
         } else {
-            println!("[TRADING] Trading dinonaktifkan (TRADING_ENABLED=false)");
+            println!("[TRADING] Trading disabled (TRADING_ENABLED=false)");
             None
         };
 
         let trading_mode = if trading_config.trading_enabled && wallet.is_some() {
-            "AKTIF"
+            "ACTIVE"
         } else {
-            "NON-AKTIF"
+            "INACTIVE"
         };
 
         println!("[TRADING] Mode: {} | Max: {:.2} SOL | TP: {:.1}% | SL: {:.1}%",
@@ -595,13 +595,13 @@ impl SolanaBot {
             trading_config.stop_loss_percent,
         );
 
-        // Load paper trading config dan state
+        // Load paper trading config and state
         let paper_config = PaperConfig::from_env();
         let paper_state = if paper_config.enabled {
-            println!("[PAPER] Paper trading AKTIF | Virtual balance: {:.2} SOL", paper_config.virtual_balance_sol);
+            println!("[PAPER] Paper trading ACTIVE | Virtual balance: {:.2} SOL", paper_config.virtual_balance_sol);
             load_paper_state(paper_config.virtual_balance_sol)
         } else {
-            println!("[PAPER] Paper trading non-aktif (set PAPER_TRADING_ENABLED=true untuk mengaktifkan)");
+            println!("[PAPER] Paper trading inactive (set PAPER_TRADING_ENABLED=true to enable)");
             PaperTradingState::new(paper_config.virtual_balance_sol)
         };
 
@@ -625,7 +625,7 @@ impl SolanaBot {
             telegram_token,
             telegram_chat_id,
             sol_price_usd,
-            // Set ke masa lalu agar fetch langsung dilakukan saat loop pertama
+            // Set in the past so price is fetched immediately on first loop
             last_price_update: Instant::now()
                 .checked_sub(Duration::from_secs(SOL_PRICE_UPDATE_INTERVAL_SECS + 1))
                 .unwrap_or_else(Instant::now),
@@ -648,7 +648,7 @@ impl SolanaBot {
     // ============================================================
 
     fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Sync positions ke data sebelum save
+        // Sync positions into data before saving
         let mut data_to_save = serde_json::to_value(&self.data)?;
         let pos_map: HashMap<String, PositionData> = self.positions.iter()
             .map(|(k, v)| (k.clone(), PositionData::from(v)))
@@ -657,7 +657,7 @@ impl SolanaBot {
 
         let json = serde_json::to_string_pretty(&data_to_save)?;
         fs::write("bot_data.json", json)?;
-        println!("💾 تم حفظ البيانات - {} عملة مرصودة, {} متتبعة, {} posisi aktif",
+        println!("💾 Data saved — {} seen tokens, {} tracked, {} active positions",
             self.data.seen_tokens.len(),
             self.data.tracked_tokens.len(),
             self.positions.len());
@@ -669,7 +669,7 @@ impl SolanaBot {
             Ok(content) => {
                 match serde_json::from_str::<BotPersistentData>(&content) {
                     Ok(data) => {
-                        // Load posisi aktif yang tersimpan
+                        // Restore saved active positions
                         let saved_positions: HashMap<String, Position> = data.positions.iter()
                             .map(|(k, v)| (k.clone(), Position::from(v.clone())))
                             .collect();
@@ -682,15 +682,15 @@ impl SolanaBot {
                                 .unwrap_or(false)
                         });
                         self.positions = saved_positions;
-                        println!("📂 تم تحميل البيانات: {} عملة مرصودة, {} متتبعة, {} posisi aktif",
+                        println!("📂 Data loaded: {} seen tokens, {} tracked, {} active positions",
                             self.data.seen_tokens.len(),
                             self.data.tracked_tokens.len(),
                             self.positions.len());
                     }
-                    Err(e) => println!("⚠️ خطأ في تحليل ملف البيانات: {}", e),
+                    Err(e) => println!("⚠️ Failed to parse saved data file: {}", e),
                 }
             }
-            Err(_) => println!("ℹ️ بدء جديد - لا توجد بيانات محفوظة"),
+            Err(_) => println!("ℹ️ Fresh start — no saved data found"),
         }
     }
 
@@ -733,7 +733,7 @@ impl SolanaBot {
             parse_mode: "Markdown".to_string(),
         };
         if let Err(e) = self.client.post(&url).json(&payload).send().await {
-            println!("❌ خطأ في إرسال الصورة: {}", e);
+            println!("❌ Failed to send photo: {}", e);
         }
     }
 
@@ -755,12 +755,12 @@ impl SolanaBot {
                     ],
                     vec![
                         InlineButton {
-                            text: "⏸ إيقاف مؤقت".to_string(),
+                            text: "⏸ Pause Bot".to_string(),
                             url: None,
                             callback_data: Some("/pause".to_string()),
                         },
                         InlineButton {
-                            text: "📈 الإحصاءات".to_string(),
+                            text: "📈 Stats".to_string(),
                             url: None,
                             callback_data: Some("/stats".to_string()),
                         },
@@ -769,7 +769,7 @@ impl SolanaBot {
             },
         };
         if let Err(e) = self.client.post(&url).json(&payload).send().await {
-            println!("❌ خطأ في إرسال الرسالة مع الأزرار: {}", e);
+            println!("❌ Failed to send message with buttons: {}", e);
         }
     }
 
@@ -911,13 +911,13 @@ impl SolanaBot {
     }
 
     // ============================================================
-    // SOL PRICE - Auto refresh dari API publik
+    // SOL PRICE - Auto-refresh from public APIs
     // ============================================================
 
-    /// Fetch harga SOL dari multiple sumber dengan fallback.
-    /// Urutan: Jupiter Price API → Binance → CoinGecko → harga lama
+    /// Fetch SOL price from multiple sources with fallback.
+    /// Order: Jupiter Price API → Binance → CoinGecko → last known price
     async fn fetch_sol_price(&self) -> f64 {
-        // --- Sumber 1: Jupiter Price API v6 (paling akurat untuk Solana) ---
+        // --- Source 1: Jupiter Price API v6 (most accurate for Solana) ---
         if let Ok(resp) = self.client
             .get("https://price.jup.ag/v6/price?ids=SOL")
             .send()
@@ -933,7 +933,7 @@ impl SolanaBot {
             }
         }
 
-        // --- Sumber 2: Binance public ticker (no auth required) ---
+        // --- Source 2: Binance public ticker (no auth required) ---
         if let Ok(resp) = self.client
             .get("https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT")
             .send()
@@ -951,7 +951,7 @@ impl SolanaBot {
             }
         }
 
-        // --- Sumber 3: CoinGecko free API ---
+        // --- Source 3: CoinGecko free API ---
         if let Ok(resp) = self.client
             .get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd")
             .send()
@@ -967,8 +967,8 @@ impl SolanaBot {
             }
         }
 
-        // --- Fallback: pakai harga terakhir yang tersimpan ---
-        println!("[SOL PRICE] Semua sumber gagal, pakai harga lama: ${:.2}", self.sol_price_usd);
+        // --- Fallback: use last cached price ---
+        println!("[SOL PRICE] All sources failed, using cached price: ${:.2}", self.sol_price_usd);
         self.sol_price_usd
     }
 
@@ -1029,18 +1029,18 @@ impl SolanaBot {
 
         // Flags
         if top10_pct > 50.0 {
-            flags.push(format!("🔴 Top 10 holders: {:.1}% konsentrasi tinggi", top10_pct));
+            flags.push(format!("🔴 Top 10 holders: {:.1}% — high concentration", top10_pct));
         } else {
-            signals.push(format!("✅ Distribusi holder sehat: Top 10 = {:.1}%", top10_pct));
+            signals.push(format!("✅ Healthy holder distribution: Top 10 = {:.1}%", top10_pct));
         }
         if sniper_count > 10 {
-            flags.push(format!("🔴 {} sniper terdeteksi", sniper_count));
+            flags.push(format!("🔴 {} snipers detected", sniper_count));
         }
         if bundled {
-            flags.push("🔴 Bundled wallets terdeteksi".to_string());
+            flags.push("🔴 Bundled wallets detected".to_string());
         }
         if total_holders > 500 {
-            signals.push(format!("✅ {} holder aktif", total_holders));
+            signals.push(format!("✅ {} active holders", total_holders));
         }
 
         // Score (max 25)
@@ -1084,13 +1084,13 @@ impl SolanaBot {
         let mut signals = vec![];
 
         if total_usd < 10_000.0 {
-            flags.push(format!("🔴 Likuiditas rendah: ${:.0}", total_usd));
+            flags.push(format!("🔴 Low liquidity: ${:.0}", total_usd));
         } else if total_usd > 100_000.0 {
-            signals.push(format!("✅ Likuiditas kuat: ${:.0}", total_usd));
+            signals.push(format!("✅ Strong liquidity: ${:.0}", total_usd));
         } else {
-            signals.push(format!("✅ Likuiditas cukup: ${:.0}", total_usd));
+            signals.push(format!("✅ Adequate liquidity: ${:.0}", total_usd));
         }
-        if lp_burned { signals.push("✅ LP Burned/Locked terdeteksi".to_string()); }
+        if lp_burned { signals.push("✅ LP Burned/Locked detected".to_string()); }
 
         let mut score = 0.0f64;
         if total_usd > 100_000.0 { score += 10.0; }
@@ -1151,13 +1151,13 @@ impl SolanaBot {
         has_distribution = sell_amounts.len() > buy_amounts.len();
 
         if smart_entered >= 3 {
-            signals.push(format!("🐋 {} محافظ ذكية دخلت!", smart_entered));
+            signals.push(format!("🐋 {} smart wallets entered!", smart_entered));
         }
         if accumulation && !has_distribution {
-            signals.push("📈 نمط تجميع واضح بدون توزيع".to_string());
+            signals.push("📈 Clear accumulation pattern — no distribution".to_string());
         }
         if cold_storage_transfers >= 2 {
-            signals.push(format!("🏦 {} تحويل لتخزين بارد", cold_storage_transfers));
+            signals.push(format!("🏦 {} cold storage transfers", cold_storage_transfers));
         }
 
         let mut score = 0.0f64;
@@ -1196,22 +1196,22 @@ impl SolanaBot {
         let buy_ratio = if total_txns > 0 { buys as f64 / total_txns as f64 } else { 0.5 };
 
         let pattern = if m5 > 20.0 && h1 > 50.0 {
-            Some("🚀 Bull Flag - زخم قوي".to_string())
+            Some("🚀 Bull Flag — strong momentum".to_string())
         } else if m5 > 5.0 && h1 > 20.0 && h6 > 50.0 {
             Some("📈 Ascending Triangle".to_string())
         } else if h1 < -10.0 && h6 > 20.0 {
-            Some("🔄 Wyckoff - تجميع محتمل".to_string())
+            Some("🔄 Wyckoff — possible accumulation".to_string())
         } else {
             None
         };
 
         let mut signals = vec![];
-        if m5 > 20.0 { signals.push(format!("⚡ {:.1}% خلال 5 دقائق!", m5)); }
-        if h1 > 50.0 { signals.push(format!("🚀 {:.1}% خلال ساعة!", h1)); }
-        if buy_ratio > 0.7 { signals.push(format!("📈 ضغط شراء: {:.0}% شراء", buy_ratio * 100.0)); }
-        if total_txns > 100 { signals.push(format!("🔥 {} معاملة/ساعة", total_txns)); }
+        if m5 > 20.0 { signals.push(format!("⚡ +{:.1}% in 5 minutes!", m5)); }
+        if h1 > 50.0 { signals.push(format!("🚀 +{:.1}% in 1 hour!", h1)); }
+        if buy_ratio > 0.7 { signals.push(format!("📈 Buy pressure: {:.0}% buys", buy_ratio * 100.0)); }
+        if total_txns > 100 { signals.push(format!("🔥 {} transactions/hour", total_txns)); }
         if let Some(p) = &pattern { signals.push(p.clone()); }
-        if vol24 > 500_000.0 { signals.push(format!("📊 حجم تداول: ${:.0}", vol24)); }
+        if vol24 > 500_000.0 { signals.push(format!("📊 24h volume: ${:.0}", vol24)); }
 
         let mut score = 0.0f64;
         if m5 > 20.0 { score += 3.0; } else if m5 > 10.0 { score += 1.5; }
@@ -1248,14 +1248,14 @@ impl SolanaBot {
             .unwrap_or(false);
 
         if !mint_revoked {
-            flags.push("🔴 صلاحية Mint غير ملغية - خطر سك عملات جديدة".to_string());
+            flags.push("🔴 Mint authority NOT revoked — risk of new token minting".to_string());
         } else {
-            signals.push("✅ صلاحية Mint ملغية".to_string());
+            signals.push("✅ Mint authority revoked".to_string());
         }
         if !freeze_revoked {
-            flags.push("⚠️ صلاحية Freeze نشطة - يمكن تجميد المحافظ".to_string());
+            flags.push("⚠️ Freeze authority active — wallets can be frozen".to_string());
         } else {
-            signals.push("✅ صلاحية Freeze ملغية".to_string());
+            signals.push("✅ Freeze authority revoked".to_string());
         }
 
         let mut score = 0.0f64;
@@ -1282,8 +1282,8 @@ impl SolanaBot {
             else { 10.0 };
 
         let mut signals = vec![];
-        if has_twitter { signals.push("🐦 تويتر موجود".to_string()); }
-        if has_telegram { signals.push("📱 تيليجرام موجود".to_string()); }
+        if has_twitter { signals.push("🐦 Twitter present".to_string()); }
+        if has_telegram { signals.push("📱 Telegram present".to_string()); }
 
         let score = if has_twitter && has_telegram { 10.0 }
             else if has_twitter || has_telegram { 6.0 }
@@ -1336,13 +1336,13 @@ impl SolanaBot {
 
         let holder = self.analyze_holders(addr, &pairs).await;
         if holder.bundled_wallets_detected {
-            println!("  ⏭ تخطي - محافظ مجمعة مكتشفة");
+            println!("  ⏭ Skip — bundled wallets detected");
             return None;
         }
 
         let liquidity = self.analyze_liquidity(&pairs);
         if liquidity.total_usd < 5000.0 {
-            println!("  ⏭ تخطي - سيولة منخفضة جداً");
+            println!("  ⏭ Skip — liquidity too low");
             return None;
         }
 
@@ -1351,7 +1351,7 @@ impl SolanaBot {
         let security  = self.analyze_contract_security(addr).await;
 
         if !security.mint_authority_revoked {
-            println!("  ⏭ تخطي - صلاحية Mint غير ملغية");
+            println!("  ⏭ Skip — mint authority not revoked");
             return None;
         }
 
@@ -1369,7 +1369,7 @@ impl SolanaBot {
         };
 
         if total < min_score {
-            println!("  ⚪ نقاط غير كافية: {:.1} < {:.1}", total, min_score);
+            println!("  ⚪ Score too low: {:.1} < {:.1}", total, min_score);
             return None;
         }
 
@@ -1453,65 +1453,65 @@ impl SolanaBot {
         m.push_str(&format!("**{}** `({})`\n", a.name, a.symbol));
         m.push_str(&format!("📍 `{}`\n\n", a.token_address));
 
-        m.push_str("📊 **لوحة التحليل:**\n");
-        m.push_str(&format!("⭐ الإجمالي: **{:.1}/100**\n", a.total_score));
-        m.push_str(&format!("👥 الحاملون: **{:.1}/25**\n", a.holder_analysis.score));
-        m.push_str(&format!("🌊 السيولة: **{:.1}/20**\n", a.liquidity_analysis.score));
-        m.push_str(&format!("🐋 الحيتان: **{:.1}/20**\n", a.whale_analysis.score));
-        m.push_str(&format!("📈 التقني: **{:.1}/10**\n", a.technical_analysis.score));
-        m.push_str(&format!("🛡️ الأمان: **{:.1}/10**\n", a.contract_security.score));
-        m.push_str(&format!("🌐 الاجتماعي: **{:.1}/15**\n\n", a.social_analysis.score));
+        m.push_str("📊 **Analysis Dashboard:**\n");
+        m.push_str(&format!("⭐ Total: **{:.1}/100**\n", a.total_score));
+        m.push_str(&format!("👥 Holders: **{:.1}/25**\n", a.holder_analysis.score));
+        m.push_str(&format!("🌊 Liquidity: **{:.1}/20**\n", a.liquidity_analysis.score));
+        m.push_str(&format!("🐋 Whales: **{:.1}/20**\n", a.whale_analysis.score));
+        m.push_str(&format!("📈 Technical: **{:.1}/10**\n", a.technical_analysis.score));
+        m.push_str(&format!("🛡️ Security: **{:.1}/10**\n", a.contract_security.score));
+        m.push_str(&format!("🌐 Social: **{:.1}/15**\n\n", a.social_analysis.score));
 
-        m.push_str("💰 **البيانات المالية:**\n");
+        m.push_str("💰 **Market Data:**\n");
         if let Some(price) = a.price_usd {
-            m.push_str(&format!("💵 السعر: **${:.8}**\n", price));
+            m.push_str(&format!("💵 Price: **${:.8}**\n", price));
         }
         if let Some(mc) = a.market_cap {
             m.push_str(&format!("🏛️ Market Cap: **{}**\n", format_usd(mc)));
         }
-        m.push_str(&format!("🌊 السيولة: **{}**\n", format_usd(a.liquidity_analysis.total_usd)));
-        m.push_str(&format!("📊 الحجم 24h: **{}**\n\n", format_usd(a.technical_analysis.volume_24h)));
+        m.push_str(&format!("🌊 Liquidity: **{}**\n", format_usd(a.liquidity_analysis.total_usd)));
+        m.push_str(&format!("📊 Volume 24h: **{}**\n\n", format_usd(a.technical_analysis.volume_24h)));
 
-        m.push_str("⏰ **توقيت الدخول:**\n");
-        m.push_str(&format!("{}\n", a.lifecycle.phase.to_arabic()));
-        m.push_str(&format!("⏱️ عمر العملة: **{} دقيقة**\n", a.lifecycle.age_minutes));
+        m.push_str("⏰ **Entry Timing:**\n");
+        m.push_str(&format!("{}\n", a.lifecycle.phase.to_label()));
+        m.push_str(&format!("⏱️ Token age: **{} minutes**\n", a.lifecycle.age_minutes));
         m.push_str(&format!("📐 R/R Ratio: **1:{:.0}**\n\n", a.lifecycle.risk_reward_ratio));
 
-        m.push_str(&format!("🎯 **المضاعف المحتمل: {}**\n\n", a.potential_multiplier));
+        m.push_str(&format!("🎯 **Potential Multiplier: {}**\n\n", a.potential_multiplier));
 
-        m.push_str("✅ **أهم الإشارات:**\n");
+        m.push_str("✅ **Top Signals:**\n");
         for signal in &a.top_signals {
             m.push_str(&format!("▫️ {}\n", signal));
         }
 
         if !a.all_red_flags.is_empty() {
-            m.push_str("\n⚠️ **تحذيرات:**\n");
+            m.push_str("\n⚠️ **Warnings:**\n");
             for flag in a.all_red_flags.iter().take(3) {
                 m.push_str(&format!("▪️ {}\n", flag));
             }
         }
 
-        // Tambahkan status auto buy jika trading enabled
+        // Add auto buy status if trading is enabled
         if self.trading_config.trading_enabled {
-            m.push_str(&format!("\n🤖 **Auto Buy:** {} SOL",
+            m.push_str(&format!("\n🤖 **Auto Buy:** {}",
                 if a.total_score >= self.trading_config.min_score_to_buy {
-                    format!("Akan beli {:.3} SOL", ((a.total_score - 75.0) / 25.0).max(0.0).min(1.0) * self.trading_config.max_position_sol)
+                    format!("Will buy {:.3} SOL", ((a.total_score - 75.0) / 25.0).max(0.0).min(1.0) * self.trading_config.max_position_sol)
                 } else {
-                    "Tidak memenuhi syarat".to_string()
+                    "Does not meet criteria".to_string()
                 }
             ));
         }
 
         m.push_str("\n═══════════════════════════════\n");
-        m.push_str("⚠️ **هذا تحليل آلي وليس نصيحة مالية**\n");
-        m.push_str("🔍 قم ببحثك الخاص قبل الاستثمار\n");
+        m.push_str("⚠️ **This is automated analysis, not financial advice**\n");
+        m.push_str("🔍 Do your own research before investing\n");
         m
     }
 
     fn format_status(&self) -> String {
         let stats = &self.data.performance_stats;
         let pos_summary = if self.positions.is_empty() {
-            "Tidak ada posisi aktif".to_string()
+            "No active positions".to_string()
         } else {
             self.positions.values()
                 .map(|p| format!("{} ({:.1}%)", p.symbol,
@@ -1521,22 +1521,22 @@ impl SolanaBot {
         };
 
         format!(
-            "📊 **حالة البوت**\n═══════════════════════════════\n\
-            🔍 العملات المرصودة: **{}**\n\
-            📌 العملات المتتبعة: **{}**\n\
-            📢 تنبيهات اليوم: **{}/{}**\n\
-            🏆 إجمالي التنبيهات: **{}**\n\
-            💹 عملات حققت 2x: **{}**\n\
-            💹 عملات حققت 5x: **{}**\n\
-            💹 عملات حققت 10x: **{}**\n\
-            🥇 أفضل عملة: **{}** ({:.1}%)\n\
-            🤖 حالة البوت: **{}**\n\n\
+            "📊 **Bot Status**\n═══════════════════════════════\n\
+            🔍 Seen Tokens: **{}**\n\
+            📌 Tracked Tokens: **{}**\n\
+            📢 Today's Alerts: **{}/{}**\n\
+            🏆 Total Alerts: **{}**\n\
+            💹 Tokens reached 2x: **{}**\n\
+            💹 Tokens reached 5x: **{}**\n\
+            💹 Tokens reached 10x: **{}**\n\
+            🥇 Best Token: **{}** ({:.1}%)\n\
+            🤖 Bot Status: **{}**\n\n\
             💼 **Trading:**\n\
             🔄 Mode: **{}**\n\
-            📊 Posisi Aktif: **{}**\n\
-            💰 Total Buy: **{}** | Total Sell: **{}**\n\
+            📊 Active Positions: **{}**\n\
+            💰 Total Buys: **{}** | Total Sells: **{}**\n\
             📈 Total Profit: **{:.4} SOL** | Loss: **{:.4} SOL**\n\
-            📋 Posisi: {}",
+            📋 Positions: {}",
             self.data.seen_tokens.len(),
             self.data.tracked_tokens.len(),
             self.data.daily_alert_count, MAX_DAILY_ALERTS,
@@ -1545,8 +1545,8 @@ impl SolanaBot {
             stats.tokens_reached_5x,
             stats.tokens_reached_10x,
             stats.best_token_symbol, stats.best_token_gain_percent,
-            if self.is_paused { "⏸ متوقف مؤقتاً" } else { "▶️ يعمل" },
-            if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 AKTIF" } else { "🔴 NON-AKTIF" },
+            if self.is_paused { "⏸ Paused" } else { "▶️ Running" },
+            if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 ACTIVE" } else { "🔴 INACTIVE" },
             self.positions.len(),
             stats.total_buys, stats.total_sells,
             stats.total_profit_sol, stats.total_loss_sol,
@@ -1555,7 +1555,7 @@ impl SolanaBot {
     }
 
     // ============================================================
-    // AUTO BUY - Eksekusi pembelian setelah analisis
+    // AUTO BUY - Execute purchase after analysis
     // ============================================================
 
     async fn check_and_buy(&mut self, analysis: &FullTokenAnalysis) {
@@ -1578,37 +1578,37 @@ impl SolanaBot {
         log_buy_decision(&signal, &decision);
 
         if let BuyDecision::Buy { amount_sol, reason, .. } = decision {
-            println!("[AUTO BUY] Eksekusi buy {} - {:.4} SOL | {}", signal.symbol, amount_sol, reason);
+            println!("[AUTO BUY] Executing buy {} — {:.4} SOL | {}", signal.symbol, amount_sol, reason);
 
-            // Cek saldo wallet
+            // Check wallet balance
             let balance = match self.wallet.as_ref().unwrap().get_sol_balance().await {
                 Ok(b) => b,
                 Err(e) => {
-                    println!("[AUTO BUY] Gagal cek saldo: {}", e);
+                    println!("[AUTO BUY] Failed to check balance: {}", e);
                     return;
                 }
             };
 
             if balance < amount_sol + 0.01 {
-                println!("[AUTO BUY] Saldo tidak cukup: {:.4} SOL (butuh {:.4} SOL)", balance, amount_sol + 0.01);
+                println!("[AUTO BUY] Insufficient balance: {:.4} SOL (need {:.4} SOL)", balance, amount_sol + 0.01);
                 return;
             }
 
-            // Eksekusi buy
+            // Execute buy
             match self.wallet.as_ref().unwrap()
                 .buy_token(&signal.token_address, amount_sol, self.trading_config.default_slippage)
                 .await
             {
                 Ok(signature) => {
-                    println!("[AUTO BUY] ✅ SUKSES! TX: {}", signature);
+                    println!("[AUTO BUY] ✅ SUCCESS! TX: {}", signature);
 
-                    // Estimasi token yang diterima (pakai price USD)
+                    // Estimate tokens received (using USD price)
                     let sol_price_usd = self.sol_price_usd;
                     let token_amount = if signal.current_price_usd > 0.0 {
                         (amount_sol * sol_price_usd) / signal.current_price_usd
                     } else { 0.0 };
 
-                    // Buat posisi baru
+                    // Create new position
                     let position = Position::new(
                         signal.token_address.clone(),
                         signal.symbol.clone(),
@@ -1621,7 +1621,7 @@ impl SolanaBot {
                     self.positions.insert(signal.token_address.clone(), position);
                     self.data.performance_stats.total_buys += 1;
 
-                    // Kirim notifikasi Telegram
+                    // Send Telegram notification
                     let msg = format_buy_notification(
                         &signal.token_address,
                         &signal.symbol,
@@ -1634,9 +1634,9 @@ impl SolanaBot {
                     let _ = self.send_message(&msg).await;
                 }
                 Err(e) => {
-                    println!("[AUTO BUY] ❌ GAGAL: {}", e);
+                    println!("[AUTO BUY] ❌ FAILED: {}", e);
                     let err_msg = format!(
-                        "❌ **AUTO BUY GAGAL**\nToken: {} ({})\nError: {}\nSilakan cek log untuk detail.",
+                        "❌ **AUTO BUY FAILED**\nToken: {} ({})\nError: {}\nCheck logs for details.",
                         signal.name, signal.symbol, e
                     );
                     let _ = self.send_message(&err_msg).await;
@@ -1646,7 +1646,7 @@ impl SolanaBot {
     }
 
     // ============================================================
-    // AUTO SELL - Cek dan eksekusi penjualan posisi
+    // AUTO SELL - Check and execute position exits
     // ============================================================
 
     async fn check_and_sell_positions(&mut self) {
@@ -1657,9 +1657,9 @@ impl SolanaBot {
             return;
         }
 
-        println!("[AUTO SELL] Mengecek {} posisi aktif...", self.positions.len());
+        println!("[AUTO SELL] Checking {} active positions...", self.positions.len());
 
-        // Ambil harga current untuk semua posisi
+        // Fetch current prices for all positions
         let mut prices: HashMap<String, f64> = HashMap::new();
         let addresses: Vec<String> = self.positions.keys().cloned().collect();
 
@@ -1682,14 +1682,14 @@ impl SolanaBot {
             }
         }
 
-        // Evaluasi semua posisi
+        // Evaluate all positions
         let decisions = evaluate_all_positions(
             &mut self.positions,
             &prices,
             &self.trading_config,
         );
 
-        // Eksekusi sell untuk yang triggered
+        // Execute sells for triggered positions
         for (addr, decision) in decisions {
             if let SellDecision::Sell { percentage, trigger } = decision {
                 let (symbol, name, buy_price, amount_sol) = {
@@ -1703,7 +1703,7 @@ impl SolanaBot {
                 let current_price = prices.get(&addr).copied().unwrap_or(0.0);
 
                 println!(
-                    "[AUTO SELL] Eksekusi sell {} - {:.1}% | {}",
+                    "[AUTO SELL] Executing sell {} — {:.1}% | {}",
                     symbol, percentage, trigger.description()
                 );
 
@@ -1712,7 +1712,7 @@ impl SolanaBot {
                     .await
                 {
                     Ok(signature) => {
-                        println!("[AUTO SELL] ✅ SUKSES! TX: {}", signature);
+                        println!("[AUTO SELL] ✅ SUCCESS! TX: {}", signature);
 
                         let profit_pct = if buy_price > 0.0 {
                             (current_price - buy_price) / buy_price * 100.0
@@ -1727,18 +1727,18 @@ impl SolanaBot {
                             self.data.performance_stats.total_loss_sol += profit_sol.abs();
                         }
 
-                        // Kirim notifikasi
+                        // Send notification
                         if let Some(pos) = self.positions.get(&addr) {
                             let msg = format_sell_notification(pos, current_price, &trigger, &signature);
                             let _ = self.send_message(&msg).await;
                         }
 
-                        // Update posisi setelah sell
+                        // Update position after sell
                         if percentage >= 100.0 {
                             self.positions.remove(&addr);
-                            println!("[AUTO SELL] Posisi {} dihapus dari daftar aktif", symbol);
+                            println!("[AUTO SELL] Position {} removed from active list", symbol);
                         } else {
-                            // Partial sell — kurangi amount dan tandai TP stage
+                            // Partial sell — reduce amount and mark TP stage
                             let remaining = 1.0 - percentage / 100.0;
                             if let Some(pos) = self.positions.get_mut(&addr) {
                                 pos.amount_in_sol *= remaining;
@@ -1746,11 +1746,11 @@ impl SolanaBot {
                                 match &trigger {
                                     crate::sell_strategy::SellTrigger::PartialTakeProfit { stage: 1, .. } => {
                                         pos.tp1_fired = true;
-                                        println!("[AUTO SELL] TP1 fire — sisa {:.0}% posisi tetap aktif", remaining * 100.0);
+                                        println!("[AUTO SELL] TP1 fired — {:.0}% of position remains active", remaining * 100.0);
                                     }
                                     crate::sell_strategy::SellTrigger::PartialTakeProfit { stage: 2, .. } => {
                                         pos.tp2_fired = true;
-                                        println!("[AUTO SELL] TP2 fire — sisa {:.0}% posisi tetap aktif", remaining * 100.0);
+                                        println!("[AUTO SELL] TP2 fired — {:.0}% of position remains active", remaining * 100.0);
                                     }
                                     _ => {}
                                 }
@@ -1758,23 +1758,23 @@ impl SolanaBot {
                         }
                     }
                     Err(e) => {
-                        println!("[AUTO SELL] ❌ GAGAL sell {}: {}", symbol, e);
+                        println!("[AUTO SELL] ❌ FAILED selling {}: {}", symbol, e);
                         let err_msg = format!(
-                            "❌ **AUTO SELL GAGAL**\n{}\nTrigger: {}\nError: {}",
+                            "❌ **AUTO SELL FAILED**\n{}\nTrigger: {}\nError: {}",
                             symbol, trigger.description(), e
                         );
                         let _ = self.send_message(&err_msg).await;
                     }
                 }
 
-                // Delay antara sell
+                // Delay between sells
                 sleep(Duration::from_secs(2)).await;
             }
         }
     }
 
     // ============================================================
-    // PAPER TRADING - Simulasi Buy
+    // PAPER TRADING - Simulated Buy
     // ============================================================
 
     async fn check_and_paper_buy(&mut self, analysis: &FullTokenAnalysis) {
@@ -1793,7 +1793,7 @@ impl SolanaBot {
             market_cap: analysis.market_cap,
         };
 
-        // Pakai logika sama dengan live trading, tapi evaluasi terhadap posisi paper
+        // Use same logic as live trading, but evaluate against paper positions
         let paper_positions_snapshot: HashMap<String, Position> = self.paper_state.positions.iter()
             .map(|(k, v)| {
                 (k.clone(), Position::new(
@@ -1832,7 +1832,7 @@ impl SolanaBot {
             let quoted_price = signal.current_price_usd;
             let sol_price_usd = self.sol_price_usd;
 
-            // Hitung price impact sebelum execute_buy (untuk ditampilkan di notifikasi)
+            // Calculate price impact before execute_buy (for notification)
             let price_impact = PaperTradingState::calc_price_impact_pct(
                 amount_sol, signal.liquidity_usd, sol_price_usd,
             );
@@ -1865,9 +1865,9 @@ impl SolanaBot {
                     );
                     let _ = self.send_message(&msg).await;
 
-                    // Auto-save setelah setiap buy
+                    // Auto-save after each buy
                     if let Err(e) = save_paper_state(&self.paper_state) {
-                        println!("[PAPER] Gagal save state: {}", e);
+                        println!("[PAPER] Failed to save state: {}", e);
                     }
                 }
                 Err(e) => println!("[PAPER BUY] Skip: {}", e),
@@ -1876,7 +1876,7 @@ impl SolanaBot {
     }
 
     // ============================================================
-    // PAPER TRADING - Simulasi Sell (cek semua posisi)
+    // PAPER TRADING - Simulated Sell (check all positions)
     // ============================================================
 
     async fn check_and_paper_sell(&mut self) {
@@ -1884,9 +1884,9 @@ impl SolanaBot {
             return;
         }
 
-        println!("[PAPER SELL] Mengecek {} posisi paper...", self.paper_state.positions.len());
+        println!("[PAPER SELL] Checking {} paper positions...", self.paper_state.positions.len());
 
-        // Ambil harga semua posisi terbuka
+        // Fetch current prices for all open positions
         let mut prices: HashMap<String, f64> = HashMap::new();
         let addrs: Vec<String> = self.paper_state.positions.keys().cloned().collect();
 
@@ -1908,7 +1908,7 @@ impl SolanaBot {
             }
         }
 
-        // Evaluasi TP/SL/Trailing — mendukung 3-stage TP
+        // Evaluate TP/SL/Trailing — supports 3-stage TP
         let to_sell = self.paper_state.evaluate_positions(
             &prices,
             self.paper_config.take_profit_percent,
@@ -1923,7 +1923,7 @@ impl SolanaBot {
             self.trading_config.time_exit_threshold_pct,
         );
 
-        // Eksekusi sell paper
+        // Execute paper sells
         for (addr, reason, sell_price, sell_pct, tp_stage) in to_sell {
             match self.paper_state.execute_sell(&addr, sell_price, sell_pct, self.paper_config.default_slippage, reason, tp_stage) {
                 Ok(trade) => {
@@ -1931,9 +1931,9 @@ impl SolanaBot {
                     let msg = format_paper_sell_notification(&trade, balance);
                     let _ = self.send_message(&msg).await;
 
-                    // Save setelah sell
+                    // Save after sell
                     if let Err(e) = save_paper_state(&self.paper_state) {
-                        println!("[PAPER] Gagal save state: {}", e);
+                        println!("[PAPER] Failed to save state: {}", e);
                     }
                 }
                 Err(e) => println!("[PAPER SELL] Error: {}", e),
@@ -1943,13 +1943,13 @@ impl SolanaBot {
     }
 
     // ============================================================
-    // PAPER TRADING - Kirim laporan periodik
+    // PAPER TRADING - Send periodic report
     // ============================================================
 
     async fn send_paper_report(&mut self, current_prices: &HashMap<String, f64>) {
         if !self.paper_config.enabled { return; }
         let report = format_paper_report(&self.paper_state, current_prices);
-        println!("[PAPER] Mengirim laporan periodik...");
+        println!("[PAPER] Sending periodic report...");
         let _ = self.send_message(&report).await;
     }
 
@@ -1998,12 +1998,12 @@ impl SolanaBot {
                     }
 
                     let (emoji, title) = match ms {
-                        50   => ("🎉", "بداية موفقة"),
-                        100  => ("🚀💎", "مضاعفة رأس المال"),
-                        200  => ("🔥💰", "ربح استثنائي"),
-                        500  => ("⭐🏆", "أداء أسطوري"),
-                        1000 => ("👑💎", "عملة 10x الذهبية"),
-                        _    => ("🌟🚀", "ربح خرافي"),
+                        50   => ("🎉", "Great Start!"),
+                        100  => ("🚀💎", "Capital Doubled!"),
+                        200  => ("🔥💰", "Exceptional Gain!"),
+                        500  => ("⭐🏆", "Legendary Performance!"),
+                        1000 => ("👑💎", "10x Golden Token!"),
+                        _    => ("🌟🚀", "Insane Gain!"),
                     };
                     let hours = Utc::now()
                         .signed_duration_since(
@@ -2013,13 +2013,13 @@ impl SolanaBot {
                         ).num_hours();
                     let msg = format!(
                         "{} **{}!** {}\n═══════════════════════════════\n\n\
-                        💎 العملة: **{}** `({})`\n\
-                        📈 الربح: **+{:.1}%**\n\
-                        💰 سعر الاكتشاف: **${:.8}**\n\
-                        💰 السعر الحالي: **${:.8}**\n\
-                        ⏰ منذ الاكتشاف: **{} ساعة**\n\n\
-                        🎉 **مبروك لجميع المتابعين!**\n\
-                        🤖 تم اكتشاف هذه الفرصة بواسطة البوت",
+                        💎 Token: **{}** `({})`\n\
+                        📈 Gain: **+{:.1}%**\n\
+                        💰 Discovery Price: **${:.8}**\n\
+                        💰 Current Price: **${:.8}**\n\
+                        ⏰ Since Discovery: **{} hours**\n\n\
+                        🎉 **Congrats to all followers!**\n\
+                        🤖 This opportunity was discovered by the bot",
                         emoji, title, emoji,
                         token_name, token_symbol,
                         pct, initial_price, price, hours
@@ -2044,9 +2044,9 @@ impl SolanaBot {
     // ============================================================
 
     async fn run(&mut self) {
-        println!("🚀 Bot Analisis Solana v2.0 dimulai...");
-        println!("📊 Trading: {} | Max posisi: {:.2} SOL | TP: {:.1}% | SL: {:.1}%",
-            if self.trading_config.trading_enabled && self.wallet.is_some() { "AKTIF" } else { "NON-AKTIF" },
+        println!("🚀 Solana Analysis Bot v2.0 starting...");
+        println!("📊 Trading: {} | Max position: {:.2} SOL | TP: {:.1}% | SL: {:.1}%",
+            if self.trading_config.trading_enabled && self.wallet.is_some() { "ACTIVE" } else { "INACTIVE" },
             self.trading_config.max_position_sol,
             self.trading_config.take_profit_percent,
             self.trading_config.stop_loss_percent,
@@ -2055,16 +2055,16 @@ impl SolanaBot {
         self.load();
 
         let startup_msg = format!(
-            "🤖 **Bot Solana v2.0 Dimulai!**\n\
+            "🤖 **Solana Bot v2.0 Started!**\n\
             ═══════════════════════════════\n\
-            📊 Mode Trading: {}\n\
-            💰 Max Posisi: {:.2} SOL\n\
+            📊 Trading Mode: {}\n\
+            💰 Max Position: {:.2} SOL\n\
             📈 Take Profit: {:.1}%\n\
             🛑 Stop Loss: {:.1}%\n\
-            🔄 Trailing Stop: aktif setelah +{:.1}%, jarak {:.1}%\n\
-            🔍 Min Skor Beli: {:.1}/100\n\
-            💧 Min Likuiditas: ${:.0}",
-            if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 AKTIF" } else { "🔴 ANALISIS ONLY" },
+            🔄 Trailing Stop: active after +{:.1}%, distance {:.1}%\n\
+            🔍 Min Buy Score: {:.1}/100\n\
+            💧 Min Liquidity: ${:.0}",
+            if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 ACTIVE" } else { "🔴 ANALYSIS ONLY" },
             self.trading_config.max_position_sol,
             self.trading_config.take_profit_percent,
             self.trading_config.stop_loss_percent,
@@ -2082,7 +2082,7 @@ impl SolanaBot {
             self.reset_daily_count_if_needed();
 
             // -------------------------------------------------------
-            // AUTO UPDATE HARGA SOL (setiap 5 menit)
+            // AUTO-UPDATE SOL PRICE (every 5 minutes)
             // -------------------------------------------------------
             if self.last_price_update.elapsed() >= Duration::from_secs(SOL_PRICE_UPDATE_INTERVAL_SECS) {
                 let new_price = self.fetch_sol_price().await;
@@ -2097,7 +2097,7 @@ impl SolanaBot {
             }
 
             // -------------------------------------------------------
-            // CEK & SELL POSISI AKTIF (setiap 60 detik)
+            // CHECK & SELL ACTIVE POSITIONS (every 60 seconds)
             // -------------------------------------------------------
             if self.last_sell_check.elapsed() >= Duration::from_secs(SELL_CHECK_INTERVAL_SECS) {
                 self.check_and_sell_positions().await;
@@ -2106,7 +2106,7 @@ impl SolanaBot {
             }
 
             // -------------------------------------------------------
-            // PAPER TRADING - Laporan periodik
+            // PAPER TRADING - Periodic report
             // -------------------------------------------------------
             if self.paper_config.enabled
                 && self.last_paper_report.elapsed() >= Duration::from_secs(self.paper_config.report_interval_secs)
@@ -2133,14 +2133,14 @@ impl SolanaBot {
             }
 
             if self.is_paused {
-                println!("⏸ Bot dijeda, menunggu 30 detik...");
+                println!("⏸ Bot paused, waiting 30 seconds...");
                 sleep(Duration::from_secs(30)).await;
                 continue;
             }
 
             scan_count += 1;
             println!("\n{}", "=".repeat(50));
-            println!("🔍 Scan #{} - {} - {} token dilihat, {} posisi aktif",
+            println!("🔍 Scan #{} - {} - {} tokens seen, {} active positions",
                 scan_count,
                 Utc::now().format("%H:%M:%S"),
                 self.data.seen_tokens.len(),
@@ -2148,12 +2148,12 @@ impl SolanaBot {
             );
 
             // -------------------------------------------------------
-            // SCAN TOKEN BARU
+            // SCAN NEW TOKENS
             // -------------------------------------------------------
             let tokens = match self.get_new_solana_tokens().await {
                 Ok(t) => t,
                 Err(e) => {
-                    println!("❌ Gagal ambil token: {}", e);
+                    println!("❌ Failed to fetch tokens: {}", e);
                     sleep(Duration::from_secs(SCAN_INTERVAL_SECS)).await;
                     continue;
                 }
@@ -2163,7 +2163,7 @@ impl SolanaBot {
                 .filter(|t| !self.data.seen_tokens.contains_key(&t.token_address))
                 .collect();
 
-            println!("📊 {} token baru ditemukan untuk dianalisis", new_tokens.len());
+            println!("📊 {} new tokens found for analysis", new_tokens.len());
 
             for token in &new_tokens {
                 self.data.seen_tokens.insert(
@@ -2172,33 +2172,33 @@ impl SolanaBot {
                 );
             }
 
-            // Analisis token baru
+            // Analyze new tokens
             for token in new_tokens.iter().take(10) {
                 if self.data.daily_alert_count >= MAX_DAILY_ALERTS {
-                    println!("⚠️ Batas alert harian tercapai ({}/{})", self.data.daily_alert_count, MAX_DAILY_ALERTS);
+                    println!("⚠️ Daily alert limit reached ({}/{})", self.data.daily_alert_count, MAX_DAILY_ALERTS);
                     break;
                 }
 
-                print!("🔬 Menganalisis {} ({})... ",
+                print!("🔬 Analyzing {} ({})... ",
                     token.name.as_deref().unwrap_or("?"),
                     token.symbol.as_deref().unwrap_or("?")
                 );
 
                 if let Some(analysis) = self.full_analyze(token).await {
-                    println!("✅ Skor: {:.1}/100", analysis.total_score);
+                    println!("✅ Score: {:.1}/100", analysis.total_score);
 
-                    // Kirim alert Telegram
+                    // Send Telegram alert
                     let msg = self.format_alert(&analysis);
                     let dex_url = analysis.dex_urls.first().cloned().unwrap_or_default();
                     self.send_alert_with_buttons(&msg, &dex_url).await;
 
-                    // Kirim gambar jika ada
+                    // Send image if available
                     if let Some(img) = &analysis.image_url {
-                        let caption = format!("{} ({}) - Skor: {:.1}/100", analysis.name, analysis.symbol, analysis.total_score);
+                        let caption = format!("{} ({}) - Score: {:.1}/100", analysis.name, analysis.symbol, analysis.total_score);
                         self.send_photo(img, &caption).await;
                     }
 
-                    // Tracking profit
+                    // Profit tracking
                     if let Some(price) = analysis.price_usd {
                         if price > 0.0 && !self.data.tracked_tokens.contains_key(&analysis.token_address) {
                             self.data.tracked_tokens.insert(
@@ -2221,12 +2221,12 @@ impl SolanaBot {
                     self.data.performance_stats.total_alerts_sent += 1;
 
                     // -----------------------------------------------
-                    // AUTO BUY (live) - cek apakah perlu beli
+                    // AUTO BUY (live) - check if we should buy
                     // -----------------------------------------------
                     self.check_and_buy(&analysis).await;
 
                     // -----------------------------------------------
-                    // PAPER BUY (simulasi) - jalankan bersamaan
+                    // PAPER BUY (simulation) - run in parallel
                     // -----------------------------------------------
                     self.check_and_paper_buy(&analysis).await;
 
@@ -2239,10 +2239,10 @@ impl SolanaBot {
             }
 
             // -------------------------------------------------------
-            // CEK PROFIT TOKEN YANG DITRACKING
+            // CHECK PROFIT ON TRACKED TOKENS
             // -------------------------------------------------------
             if last_profit_check.elapsed() >= Duration::from_secs(PROFIT_CHECK_INTERVAL_SECS) {
-                println!("\n💰 Mengecek profit token yang ditracking...");
+                println!("\n💰 Checking profit on tracked tokens...");
                 self.check_profits().await;
                 last_profit_check = Instant::now();
             }
@@ -2253,7 +2253,7 @@ impl SolanaBot {
             let save_interval = chrono::Duration::minutes(SAVE_INTERVAL_MINS);
             if Utc::now().signed_duration_since(self.last_save) >= save_interval {
                 if let Err(e) = self.save() {
-                    println!("❌ Gagal save: {}", e);
+                    println!("❌ Failed to save: {}", e);
                 }
                 self.last_save = Utc::now();
             }
@@ -2283,11 +2283,11 @@ fn format_usd(amount: f64) -> String {
 
 #[tokio::main]
 async fn main() {
-    // Load .env sebelum apapun
+    // Load .env before anything else
     let _ = dotenv::dotenv();
 
     // --------------------------------------------------------
-    // Cek argumen CLI
+    // Check CLI arguments
     // --------------------------------------------------------
     let args: Vec<String> = std::env::args().collect();
     let is_backtest = args.iter().any(|a| a == "--backtest" || a == "-b");
@@ -2295,22 +2295,22 @@ async fn main() {
     let is_help     = args.iter().any(|a| a == "--help" || a == "-h");
 
     if is_help {
-        println!("Bot Analisis Solana v2.0 + Auto Trade + Paper Trading + Backtest");
+        println!("Solana Analysis Bot v2.0 + Auto Trade + Paper Trading + Backtest");
         println!();
-        println!("PENGGUNAAN:");
-        println!("  cargo run                 → Jalankan bot utama (scan & analisis)");
-        println!("  cargo run -- --backtest   → Backtest strategi saat ini");
-        println!("  cargo run -- --compare    → Bandingkan 8 preset konfigurasi sekaligus");
-        println!("  cargo run -- --help       → Tampilkan bantuan ini");
+        println!("USAGE:");
+        println!("  cargo run                 → Run main bot (scan & analyze)");
+        println!("  cargo run -- --backtest   → Backtest current strategy");
+        println!("  cargo run -- --compare    → Compare 8 configuration presets at once");
+        println!("  cargo run -- --help       → Show this help");
         println!();
         println!("ENVIRONMENT VARIABLES:");
-        println!("  TRADING_ENABLED=false        Master switch live trading");
-        println!("  PAPER_TRADING_ENABLED=false  Simulasi trading tanpa uang nyata");
-        println!("  BACKTEST_TOKEN_LIMIT=150     Jumlah token untuk backtest/compare");
-        println!("  BACKTEST_MIN_AGE_HOURS=6     Umur minimum token (jam)");
-        println!("  BACKTEST_MAX_AGE_HOURS=72    Umur maksimum token (jam)");
-        println!("  BACKTEST_MIN_LIQUIDITY=5000  Likuiditas minimum USD");
-        println!("  PAPER_BALANCE_SOL=10.0       Saldo virtual paper trading");
+        println!("  TRADING_ENABLED=false        Master switch for live trading");
+        println!("  PAPER_TRADING_ENABLED=false  Simulated trading without real money");
+        println!("  BACKTEST_TOKEN_LIMIT=150     Number of tokens for backtest/compare");
+        println!("  BACKTEST_MIN_AGE_HOURS=6     Minimum token age (hours)");
+        println!("  BACKTEST_MAX_AGE_HOURS=72    Maximum token age (hours)");
+        println!("  BACKTEST_MIN_LIQUIDITY=5000  Minimum liquidity in USD");
+        println!("  PAPER_BALANCE_SOL=10.0       Virtual paper trading balance");
         return;
     }
 
@@ -2325,12 +2325,12 @@ async fn main() {
     }
 
     // --------------------------------------------------------
-    // Mode normal: Bot scanner
+    // Normal mode: Scanner bot
     // --------------------------------------------------------
     println!("══════════════════════════════════════════");
-    println!("   Bot Analisis Solana v2.0 + Auto Trade  ");
+    println!("   Solana Analysis Bot v2.0 + Auto Trade  ");
     println!("══════════════════════════════════════════");
-    println!("Config dari environment:");
+    println!("Config from environment:");
     println!("  TRADING_ENABLED      = {}", std::env::var("TRADING_ENABLED").unwrap_or("false".to_string()));
     println!("  PAPER_TRADING_ENABLED= {}", std::env::var("PAPER_TRADING_ENABLED").unwrap_or("false".to_string()));
     println!("  MAX_POSITION_SOL     = {}", std::env::var("MAX_POSITION_SOL").unwrap_or("0.5".to_string()));
@@ -2339,8 +2339,8 @@ async fn main() {
     println!("  WALLET_PRIVATE_KEY   = {}", if std::env::var("WALLET_PRIVATE_KEY").is_ok() { "✅ SET" } else { "❌ NOT SET" });
     println!("══════════════════════════════════════════");
     println!();
-    println!("  Tip: Jalankan 'cargo run -- --backtest' untuk backtest strategi");
-    println!("       Jalankan 'cargo run -- --help' untuk bantuan lengkap");
+    println!("  Tip: Run 'cargo run -- --backtest' to backtest strategy");
+    println!("       Run 'cargo run -- --help' for full help");
     println!("══════════════════════════════════════════\n");
 
     let mut bot = SolanaBot::new();
@@ -2348,16 +2348,16 @@ async fn main() {
 }
 
 // ============================================================
-// MODE BACKTEST
+// BACKTEST MODE
 // ============================================================
 
 // ============================================================
-// MODE COMPARE - Bandingkan 8 konfigurasi sekaligus
+// COMPARE MODE - Compare multiple strategy presets
 // ============================================================
 
 async fn run_compare_mode() {
     println!("══════════════════════════════════════════════════");
-    println!("   COMPARE MODE - Perbandingan 8 Preset Strategi  ");
+    println!("   COMPARE MODE - 8 Strategy Preset Comparison    ");
     println!("══════════════════════════════════════════════════\n");
 
     let client = match reqwest::Client::builder()
@@ -2366,7 +2366,7 @@ async fn run_compare_mode() {
         .build()
     {
         Ok(c) => c,
-        Err(e) => { eprintln!("[ERROR] Gagal membuat HTTP client: {}", e); return; }
+        Err(e) => { eprintln!("[ERROR] Failed to build HTTP client: {}", e); return; }
     };
 
     let base_config = strategy::TradingConfig::from_env();
@@ -2376,18 +2376,18 @@ async fn run_compare_mode() {
 
     match backtest::run_backtest_compare(&client, &base_config, &bt_config, None).await {
         Ok(result) => {
-            // 1. Print tabel ke console
+            // 1. Print table to console
             backtest::print_compare_table(&result);
 
-            // 2. Simpan ke file JSON
+            // 2. Save to JSON file
             if let Err(e) = backtest::save_compare_result(&result) {
-                eprintln!("[COMPARE] Gagal simpan hasil: {}", e);
+                eprintln!("[COMPARE] Failed to save result: {}", e);
             }
 
-            // 3. Kirim ke Telegram
+            // 3. Send to Telegram
             if let (Some(token), Some(chat)) = (tg_token, tg_chat) {
                 let msg = backtest::format_compare_telegram(&result);
-                println!("[COMPARE] Mengirim hasil ke Telegram...");
+                println!("[COMPARE] Sending results to Telegram...");
                 let tg_url = format!("https://api.telegram.org/bot{}/sendMessage", token);
                 let payload = serde_json::json!({
                     "chat_id": chat,
@@ -2395,27 +2395,27 @@ async fn run_compare_mode() {
                     "parse_mode": "Markdown"
                 });
                 match client.post(&tg_url).json(&payload).send().await {
-                    Ok(r) if r.status().is_success() => println!("[COMPARE] ✅ Laporan terkirim ke Telegram"),
+                    Ok(r) if r.status().is_success() => println!("[COMPARE] ✅ Report sent to Telegram"),
                     Ok(r) => eprintln!("[COMPARE] Telegram error: {}", r.status()),
-                    Err(e) => eprintln!("[COMPARE] Gagal kirim Telegram: {}", e),
+                    Err(e) => eprintln!("[COMPARE] Failed to send to Telegram: {}", e),
                 }
             } else {
-                println!("[COMPARE] Telegram tidak dikonfigurasi - hasil hanya di console dan file JSON");
+                println!("[COMPARE] Telegram not configured — results only in console and JSON file");
             }
 
-            // 4. Saran konfigurasi terbaik
+            // 4. Best configuration suggestion
             println!();
-            println!("💡 TIP: Untuk menerapkan strategi terbaik ke bot utama, tambahkan ke .env:");
+            println!("💡 TIP: To apply the best strategy to the main bot, add to .env:");
             if let Some(winner) = result.scenarios.first() {
                 let parts: Vec<&str> = winner.label.split('/').collect();
                 for part in &parts {
                     let kv: Vec<&str> = part.splitn(2, |c: char| !c.is_alphabetic() && c != '_').collect();
                     if kv.len() >= 1 {
-                        // Print konfigurasi
+                        // Print config
                     }
                 }
-                println!("   Strategi \"{}\" → {}", winner.name, winner.label);
-                println!("   Lihat file compare_*.json untuk detail lengkap.");
+                println!("   Strategy \"{}\" → {}", winner.name, winner.label);
+                println!("   See compare_*.json for full details.");
             }
         }
         Err(e) => eprintln!("[COMPARE] ❌ Error: {}", e),
@@ -2435,7 +2435,7 @@ async fn run_backtest_mode() {
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[ERROR] Gagal membuat HTTP client: {}", e);
+            eprintln!("[ERROR] Failed to build HTTP client: {}", e);
             return;
         }
     };
@@ -2443,24 +2443,24 @@ async fn run_backtest_mode() {
     let trading_config = strategy::TradingConfig::from_env();
     let bt_config      = backtest::BacktestConfig::from_env();
 
-    // Ambil konfigurasi Telegram (opsional)
+    // Load Telegram config (optional)
     let tg_token = std::env::var("TELEGRAM_BOT_TOKEN").ok();
     let tg_chat  = std::env::var("TELEGRAM_CHAT_ID").ok();
 
     match backtest::run_backtest(&client, &trading_config, &bt_config).await {
         Ok(result) => {
-            // 1. Print laporan ke console
+            // 1. Print report to console
             backtest::print_backtest_report(&result);
 
-            // 2. Simpan ke file JSON
+            // 2. Save to JSON file
             if let Err(e) = backtest::save_backtest_result(&result) {
-                eprintln!("[BACKTEST] Gagal simpan hasil: {}", e);
+                eprintln!("[BACKTEST] Failed to save result: {}", e);
             }
 
-            // 3. Kirim ke Telegram jika konfigurasi tersedia
+            // 3. Send to Telegram if configured
             if let (Some(token), Some(chat)) = (tg_token, tg_chat) {
                 let msg = backtest::format_backtest_telegram(&result);
-                println!("[BACKTEST] Mengirim laporan ke Telegram...");
+                println!("[BACKTEST] Sending report to Telegram...");
                 let tg_url = format!("https://api.telegram.org/bot{}/sendMessage", token);
                 let payload = serde_json::json!({
                     "chat_id": chat,
@@ -2468,12 +2468,12 @@ async fn run_backtest_mode() {
                     "parse_mode": "Markdown"
                 });
                 match client.post(&tg_url).json(&payload).send().await {
-                    Ok(r) if r.status().is_success() => println!("[BACKTEST] ✅ Laporan terkirim ke Telegram"),
+                    Ok(r) if r.status().is_success() => println!("[BACKTEST] ✅ Report sent to Telegram"),
                     Ok(r) => eprintln!("[BACKTEST] Telegram error: {}", r.status()),
-                    Err(e) => eprintln!("[BACKTEST] Gagal kirim Telegram: {}", e),
+                    Err(e) => eprintln!("[BACKTEST] Failed to send to Telegram: {}", e),
                 }
             } else {
-                println!("[BACKTEST] Telegram tidak dikonfigurasi - laporan hanya di console dan file JSON");
+                println!("[BACKTEST] Telegram not configured — report only in console and JSON file");
             }
         }
         Err(e) => {

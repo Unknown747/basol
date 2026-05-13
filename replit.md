@@ -52,7 +52,7 @@ src/
 
 ## User preferences
 
-- Bahasa komentar & log: Bahasa Indonesia
+- Comment & log language: English
 - Scalping dengan modal kecil: MAX_POSITION_SOL=0.05, MAX_POSITIONS=2
 - Selalu fee-aware — tidak ada target profit yang mengabaikan biaya transaksi
 

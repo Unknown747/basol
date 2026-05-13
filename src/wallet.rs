@@ -16,7 +16,7 @@ const MAX_RETRY: u32          = 3;
 const RETRY_DELAY_MS: u64     = 2000;
 
 // ============================================================
-// Structures untuk Jupiter API
+// Jupiter API Structures
 // ============================================================
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -70,30 +70,30 @@ pub struct WalletManager {
 }
 
 impl WalletManager {
-    /// Load wallet dari environment variable WALLET_PRIVATE_KEY
+    /// Load wallet from WALLET_PRIVATE_KEY environment variable
     pub fn from_env() -> Result<Self, String> {
         let pk_str = std::env::var("WALLET_PRIVATE_KEY")
-            .map_err(|_| "WALLET_PRIVATE_KEY tidak ditemukan di environment".to_string())?;
+            .map_err(|_| "WALLET_PRIVATE_KEY not found in environment".to_string())?;
 
         let pk_trimmed = pk_str.trim();
 
-        // Support format: array JSON [1,2,...] atau hex string atau base58
+        // Supports: JSON array [1,2,...], hex string, or base58
         let private_key_bytes = if pk_trimmed.starts_with('[') {
-            // Format array JSON
+            // JSON array format
             serde_json::from_str::<Vec<u8>>(pk_trimmed)
-                .map_err(|e| format!("Gagal parse private key JSON array: {}", e))?
+                .map_err(|e| format!("Failed to parse private key JSON array: {}", e))?
         } else if pk_trimmed.len() == 128 {
-            // Format hex 64 bytes
+            // 64-byte hex format
             hex::decode(pk_trimmed)
-                .map_err(|e| format!("Gagal decode hex private key: {}", e))?
+                .map_err(|e| format!("Failed to decode hex private key: {}", e))?
         } else {
-            // Format base58
+            // base58 format
             bs58_decode(pk_trimmed)?
         };
 
         if private_key_bytes.len() < 32 {
             return Err(format!(
-                "Private key terlalu pendek: {} bytes (butuh minimal 32)",
+                "Private key too short: {} bytes (need at least 32)",
                 private_key_bytes.len()
             ));
         }
@@ -103,13 +103,13 @@ impl WalletManager {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .map_err(|e| format!("Gagal build HTTP client: {}", e))?;
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-        println!("[WALLET] Wallet berhasil diload: {}", public_key);
+        println!("[WALLET] Wallet loaded successfully: {}", public_key);
         Ok(Self { client, public_key, private_key_bytes })
     }
 
-    /// Ambil saldo SOL wallet (dalam SOL)
+    /// Get wallet SOL balance (in SOL)
     pub async fn get_sol_balance(&self) -> Result<f64, String> {
         let rpc_url = std::env::var("SOLANA_RPC_URL")
             .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
@@ -126,19 +126,19 @@ impl WalletManager {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("RPC request gagal: {}", e))?;
+            .map_err(|e| format!("RPC request failed: {}", e))?;
 
         let data: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Parse response gagal: {}", e))?;
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
 
         let lamports = data["result"]["value"]
             .as_u64()
-            .ok_or("Gagal ambil balance dari response")?;
+            .ok_or("Failed to get balance from response")?;
 
         Ok(lamports as f64 / LAMPORTS_PER_SOL)
     }
 
-    /// Ambil jumlah token yang dimiliki wallet
+    /// Get token balance held by wallet
     pub async fn get_token_balance(&self, token_mint: &str) -> Result<f64, String> {
         let rpc_url = std::env::var("SOLANA_RPC_URL")
             .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
@@ -159,10 +159,10 @@ impl WalletManager {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("RPC request gagal: {}", e))?;
+            .map_err(|e| format!("RPC request failed: {}", e))?;
 
         let data: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Parse response gagal: {}", e))?;
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
 
         let accounts = data["result"]["value"].as_array();
         if let Some(accs) = accounts {
@@ -171,13 +171,13 @@ impl WalletManager {
                     .as_str()
                     .unwrap_or("0");
                 return amount_str.parse::<f64>()
-                    .map_err(|e| format!("Parse amount gagal: {}", e));
+                    .map_err(|e| format!("Failed to parse amount: {}", e));
             }
         }
         Ok(0.0)
     }
 
-    /// BUY token menggunakan Jupiter V6
+    /// BUY token using Jupiter V6
     pub async fn buy_token(
         &self,
         token_address: &str,
@@ -188,7 +188,7 @@ impl WalletManager {
         let slippage_bps = (slippage * 100.0) as u32;
 
         println!(
-            "[BUY] Mencoba beli {} - {:.4} SOL ({} lamports) slippage {:.1}%",
+            "[BUY] Attempting to buy {} - {:.4} SOL ({} lamports) slippage {:.1}%",
             token_address, amount_in_sol, amount_lamports, slippage
         );
 
@@ -196,19 +196,19 @@ impl WalletManager {
         for attempt in 1..=MAX_RETRY {
             match self.execute_buy(token_address, amount_lamports, slippage_bps).await {
                 Ok(sig) => {
-                    println!("[BUY] BERHASIL pada attempt {} - signature: {}", attempt, sig);
+                    println!("[BUY] SUCCESS on attempt {} - signature: {}", attempt, sig);
                     return Ok(sig);
                 }
                 Err(e) => {
                     last_error = e.clone();
-                    println!("[BUY] Gagal attempt {}/{}: {}", attempt, MAX_RETRY, e);
+                    println!("[BUY] Failed attempt {}/{}: {}", attempt, MAX_RETRY, e);
                     if attempt < MAX_RETRY {
                         sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
                     }
                 }
             }
         }
-        Err(format!("Buy gagal setelah {} percobaan. Error terakhir: {}", MAX_RETRY, last_error))
+        Err(format!("Buy failed after {} attempts. Last error: {}", MAX_RETRY, last_error))
     }
 
     async fn execute_buy(
@@ -226,11 +226,11 @@ impl WalletManager {
 
         let price_impact: f64 = quote.price_impact_pct.parse().unwrap_or(0.0);
         if price_impact > 5.0 {
-            return Err(format!("Price impact terlalu tinggi: {:.2}%", price_impact));
+            return Err(format!("Price impact too high: {:.2}%", price_impact));
         }
 
         println!(
-            "[BUY] Quote OK - out: {} token, price impact: {:.2}%",
+            "[BUY] Quote OK - out: {} tokens, price impact: {:.2}%",
             quote.out_amount, price_impact
         );
 
@@ -239,7 +239,7 @@ impl WalletManager {
         Ok(signature)
     }
 
-    /// SELL token menggunakan Jupiter V6
+    /// SELL token using Jupiter V6
     pub async fn sell_token(
         &self,
         token_address: &str,
@@ -249,7 +249,7 @@ impl WalletManager {
         let token_balance = self.get_token_balance(token_address).await?;
 
         if token_balance <= 0.0 {
-            return Err(format!("Tidak ada balance token {}", token_address));
+            return Err(format!("No token balance for {}", token_address));
         }
 
         let decimals = self.get_token_decimals(token_address).await.unwrap_or(6);
@@ -258,31 +258,31 @@ impl WalletManager {
         let slippage_bps = (slippage * 100.0) as u32;
 
         println!(
-            "[SELL] Mencoba jual {} - {:.2}% ({:.6} token) slippage {:.1}%",
+            "[SELL] Attempting to sell {} - {:.2}% ({:.6} tokens) slippage {:.1}%",
             token_address, percentage_to_sell, sell_amount, slippage
         );
 
         if sell_raw == 0 {
-            return Err("Amount yang dijual terlalu kecil".to_string());
+            return Err("Sell amount too small".to_string());
         }
 
         let mut last_error = String::new();
         for attempt in 1..=MAX_RETRY {
             match self.execute_sell(token_address, sell_raw, slippage_bps).await {
                 Ok(sig) => {
-                    println!("[SELL] BERHASIL pada attempt {} - signature: {}", attempt, sig);
+                    println!("[SELL] SUCCESS on attempt {} - signature: {}", attempt, sig);
                     return Ok(sig);
                 }
                 Err(e) => {
                     last_error = e.clone();
-                    println!("[SELL] Gagal attempt {}/{}: {}", attempt, MAX_RETRY, e);
+                    println!("[SELL] Failed attempt {}/{}: {}", attempt, MAX_RETRY, e);
                     if attempt < MAX_RETRY {
                         sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
                     }
                 }
             }
         }
-        Err(format!("Sell gagal setelah {} percobaan. Error terakhir: {}", MAX_RETRY, last_error))
+        Err(format!("Sell failed after {} attempts. Last error: {}", MAX_RETRY, last_error))
     }
 
     async fn execute_sell(
@@ -300,7 +300,7 @@ impl WalletManager {
 
         let price_impact: f64 = quote.price_impact_pct.parse().unwrap_or(0.0);
         println!(
-            "[SELL] Quote OK - dapat: {} lamports SOL, price impact: {:.2}%",
+            "[SELL] Quote OK - receiving: {} lamports SOL, price impact: {:.2}%",
             quote.out_amount, price_impact
         );
 
@@ -325,7 +325,7 @@ impl WalletManager {
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("Quote request gagal: {}", e))?;
+            .map_err(|e| format!("Quote request failed: {}", e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -335,7 +335,7 @@ impl WalletManager {
 
         resp.json::<JupiterQuote>()
             .await
-            .map_err(|e| format!("Parse quote gagal: {}", e))
+            .map_err(|e| format!("Failed to parse quote: {}", e))
     }
 
     async fn build_swap_transaction(&self, quote: &JupiterQuote) -> Result<String, String> {
@@ -353,7 +353,7 @@ impl WalletManager {
             .json(&request)
             .send()
             .await
-            .map_err(|e| format!("Swap request gagal: {}", e))?;
+            .map_err(|e| format!("Swap request failed: {}", e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -362,18 +362,18 @@ impl WalletManager {
         }
 
         let swap_resp: SwapResponse = resp.json().await
-            .map_err(|e| format!("Parse swap response gagal: {}", e))?;
+            .map_err(|e| format!("Failed to parse swap response: {}", e))?;
 
         Ok(swap_resp.swap_transaction)
     }
 
-    /// Sign transaction dengan private key dan kirim ke RPC
+    /// Sign transaction with private key and send to RPC
     async fn sign_and_send_transaction(&self, base64_tx: &str) -> Result<String, String> {
         use base64::{Engine as _, engine::general_purpose};
 
         let tx_bytes = general_purpose::STANDARD
             .decode(base64_tx)
-            .map_err(|e| format!("Decode base64 transaction gagal: {}", e))?;
+            .map_err(|e| format!("Failed to decode base64 transaction: {}", e))?;
 
         let signature_bytes = sign_transaction(&tx_bytes, &self.private_key_bytes)?;
         let signed_tx = inject_signature(tx_bytes, signature_bytes)?;
@@ -401,10 +401,10 @@ impl WalletManager {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("Send transaction gagal: {}", e))?;
+            .map_err(|e| format!("Failed to send transaction: {}", e))?;
 
         let data: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Parse send response gagal: {}", e))?;
+            .map_err(|e| format!("Failed to parse send response: {}", e))?;
 
         if let Some(err) = data.get("error") {
             return Err(format!("RPC error: {}", err));
@@ -412,7 +412,7 @@ impl WalletManager {
 
         let signature = data["result"]
             .as_str()
-            .ok_or("Tidak ada signature di response")?
+            .ok_or("No signature in response")?
             .to_string();
 
         Ok(signature)
@@ -434,10 +434,10 @@ impl WalletManager {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("RPC request gagal: {}", e))?;
+            .map_err(|e| format!("RPC request failed: {}", e))?;
 
         let data: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Parse response gagal: {}", e))?;
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
 
         Ok(data["result"]["value"]["decimals"].as_u64().unwrap_or(6) as u8)
     }
@@ -447,7 +447,7 @@ impl WalletManager {
 // CRYPTO HELPERS
 // ============================================================
 
-/// Decode base58 string ke Vec<u8>
+/// Decode base58 string to Vec<u8>
 fn bs58_decode(input: &str) -> Result<Vec<u8>, String> {
     const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     let mut result: Vec<u8> = Vec::new();
@@ -461,7 +461,7 @@ fn bs58_decode(input: &str) -> Result<Vec<u8>, String> {
         let digit = ALPHABET
             .iter()
             .position(|&b| b == ch as u8)
-            .ok_or_else(|| format!("Karakter tidak valid di base58: '{}'", ch))? as u64;
+            .ok_or_else(|| format!("Invalid character in base58: '{}'", ch))? as u64;
 
         let mut carry = digit;
         for byte in result.iter_mut().rev() {
@@ -480,7 +480,7 @@ fn bs58_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
-/// Encode bytes ke base58 string
+/// Encode bytes to base58 string
 fn bs58_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     let mut result: Vec<u8> = Vec::new();
@@ -513,15 +513,15 @@ fn bs58_encode(bytes: &[u8]) -> String {
     output
 }
 
-/// Derive Solana public key dari 32-byte seed menggunakan Ed25519
+/// Derive Solana public key from 32-byte seed using Ed25519
 fn derive_public_key(private_key_bytes: &[u8]) -> Result<String, String> {
     if private_key_bytes.len() < 32 {
-        return Err("Private key terlalu pendek: butuh minimal 32 byte".to_string());
+        return Err("Private key too short: need at least 32 bytes".to_string());
     }
 
     let seed: [u8; 32] = private_key_bytes[..32]
         .try_into()
-        .map_err(|_| "Gagal konversi seed ke array 32 byte".to_string())?;
+        .map_err(|_| "Failed to convert seed to 32-byte array".to_string())?;
 
     let signing_key = SigningKey::from_bytes(&seed);
     let verifying_key = signing_key.verifying_key();
@@ -529,10 +529,10 @@ fn derive_public_key(private_key_bytes: &[u8]) -> Result<String, String> {
     Ok(bs58_encode(verifying_key.as_bytes()))
 }
 
-/// Decode compact-u16 dari awal bytes, kembalikan (nilai, jumlah_byte_dipakai)
+/// Decode compact-u16 from start of bytes, returns (value, bytes_consumed)
 fn decode_compact_u16(bytes: &[u8]) -> Result<(usize, usize), String> {
     if bytes.is_empty() {
-        return Err("Bytes kosong untuk decode compact-u16".to_string());
+        return Err("Empty bytes for compact-u16 decode".to_string());
     }
 
     let b0 = bytes[0] as usize;
@@ -541,7 +541,7 @@ fn decode_compact_u16(bytes: &[u8]) -> Result<(usize, usize), String> {
     }
 
     if bytes.len() < 2 {
-        return Err("Compact-u16 terpotong (butuh 2 byte)".to_string());
+        return Err("Compact-u16 truncated (need 2 bytes)".to_string());
     }
     let b1 = bytes[1] as usize;
     if b1 <= 0x7f {
@@ -549,29 +549,29 @@ fn decode_compact_u16(bytes: &[u8]) -> Result<(usize, usize), String> {
     }
 
     if bytes.len() < 3 {
-        return Err("Compact-u16 terpotong (butuh 3 byte)".to_string());
+        return Err("Compact-u16 truncated (need 3 bytes)".to_string());
     }
     let b2 = bytes[2] as usize;
     Ok(((b0 & 0x7f) | ((b1 & 0x7f) << 7) | (b2 << 14), 3))
 }
 
-/// Sign transaction dengan Ed25519 menggunakan private key.
+/// Sign transaction with Ed25519 using private key.
 /// Solana transaction format: [compact-u16 num_sigs][sig slots][message]
-/// Hanya message bytes yang ditandatangani (setelah signature slots).
+/// Only the message bytes are signed (after the signature slots).
 fn sign_transaction(tx_bytes: &[u8], private_key_bytes: &[u8]) -> Result<[u8; 64], String> {
     if private_key_bytes.len() < 32 {
-        return Err("Private key terlalu pendek untuk signing".to_string());
+        return Err("Private key too short for signing".to_string());
     }
 
-    // Parse jumlah signature dari compact-u16 di awal
+    // Parse signature count from compact-u16 at the start
     let (num_sigs, prefix_len) = decode_compact_u16(tx_bytes)?;
 
-    // Message dimulai setelah: prefix compact-u16 + (num_sigs * 64 bytes slot signature)
+    // Message starts after: compact-u16 prefix + (num_sigs * 64 byte signature slots)
     let message_start = prefix_len + num_sigs * 64;
 
     if tx_bytes.len() <= message_start {
         return Err(format!(
-            "Transaction terlalu pendek: {} bytes, message mulai di offset {}",
+            "Transaction too short: {} bytes, message starts at offset {}",
             tx_bytes.len(), message_start
         ));
     }
@@ -580,7 +580,7 @@ fn sign_transaction(tx_bytes: &[u8], private_key_bytes: &[u8]) -> Result<[u8; 64
 
     let seed: [u8; 32] = private_key_bytes[..32]
         .try_into()
-        .map_err(|_| "Gagal konversi seed ke array 32 byte".to_string())?;
+        .map_err(|_| "Failed to convert seed to 32-byte array".to_string())?;
 
     let signing_key = SigningKey::from_bytes(&seed);
     let signature = signing_key.sign(message_bytes);
@@ -588,22 +588,22 @@ fn sign_transaction(tx_bytes: &[u8], private_key_bytes: &[u8]) -> Result<[u8; 64
     Ok(signature.to_bytes())
 }
 
-/// Inject signature ke slot pertama dalam Solana transaction.
-/// Format: [compact-u16 num_sigs][64-byte sig slot 0][...sisa...]
+/// Inject signature into first slot of a Solana transaction.
+/// Format: [compact-u16 num_sigs][64-byte sig slot 0][...rest...]
 fn inject_signature(mut tx_bytes: Vec<u8>, signature: [u8; 64]) -> Result<Vec<u8>, String> {
     if tx_bytes.is_empty() {
-        return Err("Transaction bytes kosong".to_string());
+        return Err("Transaction bytes are empty".to_string());
     }
 
     let (_, prefix_len) = decode_compact_u16(&tx_bytes)?;
 
-    // Signature pertama dimulai tepat setelah compact-u16 prefix
+    // First signature starts immediately after the compact-u16 prefix
     let sig_start = prefix_len;
     let sig_end = sig_start + 64;
 
     if tx_bytes.len() < sig_end {
         return Err(format!(
-            "Transaction terlalu pendek untuk inject signature: {} bytes (butuh minimal {})",
+            "Transaction too short to inject signature: {} bytes (need at least {})",
             tx_bytes.len(), sig_end
         ));
     }

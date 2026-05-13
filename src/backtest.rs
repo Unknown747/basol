@@ -1,7 +1,7 @@
 // ============================================================
 // BACKTESTING ENGINE
-// Simulasi strategi menggunakan data historis DexScreener
-// Jalankan: cargo run -- --backtest
+// Simulate strategy using historical DexScreener data
+// Run: cargo run -- --backtest
 // ============================================================
 
 use crate::strategy::TradingConfig;
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ============================================================
-// KONFIGURASI BACKTEST
+// BACKTEST CONFIGURATION
 // ============================================================
 
 pub struct BacktestConfig {
@@ -128,23 +128,23 @@ struct DsPairsResponse {
 }
 
 // ============================================================
-// PRICE HISTORY - Rekonstruksi harga historis
+// PRICE HISTORY - Historical price reconstruction
 // ============================================================
 
-/// 5 titik harga yang bisa direkonstruksi dari DexScreener
+/// 5 price points reconstructable from DexScreener
 #[derive(Debug, Clone)]
 pub struct PriceTimeline {
-    pub at_24h_ago: f64,    // "Harga entry" saat token ditemukan bot
-    pub at_6h_ago: f64,     // Harga 6 jam setelah entry
-    pub at_1h_ago: f64,     // Harga 1 jam terakhir
-    pub at_5m_ago: f64,     // Harga 5 menit terakhir
-    pub current: f64,       // Harga sekarang
+    pub at_24h_ago: f64,    // "Entry price" when bot discovered the token
+    pub at_6h_ago: f64,     // Price 6 hours after entry
+    pub at_1h_ago: f64,     // Price 1 hour ago
+    pub at_5m_ago: f64,     // Price 5 minutes ago
+    pub current: f64,       // Current price
 }
 
 impl PriceTimeline {
-    /// Rekonstruksi dari data DexScreener menggunakan price change
+    /// Reconstruct from DexScreener data using price change percentages
     pub fn reconstruct(current_price: f64, price_change: &DsPriceChange) -> Self {
-        // Harga di masa lalu = harga_sekarang / (1 + perubahan%)
+        // Past price = current_price / (1 + change%)
         let at_24h = if let Some(ch) = price_change.h24 {
             current_price / (1.0 + ch / 100.0)
         } else {
@@ -169,7 +169,7 @@ impl PriceTimeline {
             current_price
         };
 
-        // Hindari harga negatif (bisa terjadi jika perubahan > 100%)
+        // Avoid negative prices (can happen if change > 100%)
         Self {
             at_24h_ago: at_24h.abs().max(current_price * 0.001),
             at_6h_ago: at_6h.abs().max(current_price * 0.001),
@@ -179,25 +179,25 @@ impl PriceTimeline {
         }
     }
 
-    /// Harga tertinggi yang pernah dicapai dalam timeline
+    /// Highest price ever reached in the timeline
     pub fn peak_price(&self) -> f64 {
         [self.at_24h_ago, self.at_6h_ago, self.at_1h_ago, self.at_5m_ago, self.current]
             .iter().cloned().fold(f64::NEG_INFINITY, f64::max)
     }
 
-    /// Harga terendah dalam timeline (setelah entry)
+    /// Lowest price in the timeline (after entry)
     pub fn trough_price(&self) -> f64 {
         [self.at_6h_ago, self.at_1h_ago, self.at_5m_ago, self.current]
             .iter().cloned().fold(f64::INFINITY, f64::min)
     }
 
-    /// Max profit % yang bisa diraih (entry → puncak)
+    /// Max achievable profit % (entry → peak)
     pub fn max_profit_pct(&self, entry: f64) -> f64 {
         if entry == 0.0 { return 0.0; }
         (self.peak_price() - entry) / entry * 100.0
     }
 
-    /// Max loss % yang pernah terjadi (entry → lembah)
+    /// Max loss % that occurred (entry → trough)
     pub fn max_loss_pct(&self, entry: f64) -> f64 {
         if entry == 0.0 { return 0.0; }
         (self.trough_price() - entry) / entry * 100.0
@@ -205,7 +205,7 @@ impl PriceTimeline {
 }
 
 // ============================================================
-// SIMULASI TRADE
+// TRADE SIMULATION
 // ============================================================
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -270,13 +270,13 @@ pub struct BacktestResult {
 }
 
 // ============================================================
-// SCORING (versi cepat, tanpa Helius)
+// SCORING (fast version, without Helius)
 // ============================================================
 
 fn estimate_score(pair: &DsPair) -> f64 {
     let mut score = 0.0;
 
-    // Likuiditas (max 20)
+    // Liquidity (max 20)
     let liq = pair.liquidity.as_ref().and_then(|l| l.usd).unwrap_or(0.0);
     score += if liq >= 100_000.0 { 20.0 }
         else if liq >= 50_000.0 { 17.0 }
@@ -294,9 +294,9 @@ fn estimate_score(pair: &DsPair) -> f64 {
         else if vol_h24 >= 1_000.0   { 3.0 }
         else { 0.0 };
 
-    // Momentum harga (max 20)
+    // Price momentum (max 20)
     if let Some(pc) = &pair.price_change {
-        // Momentum 1 jam
+        // 1h momentum
         let m1h = pc.h1.unwrap_or(0.0);
         score += if m1h >= 50.0 { 10.0 }
             else if m1h >= 20.0 { 8.0 }
@@ -305,7 +305,7 @@ fn estimate_score(pair: &DsPair) -> f64 {
             else if m1h >= -15.0 { 1.0 }
             else { 0.0 };
 
-        // Momentum 5 menit
+        // 5m momentum
         let m5m = pc.m5.unwrap_or(0.0);
         score += if m5m >= 5.0 { 10.0 }
             else if m5m >= 2.0 { 7.0 }
@@ -325,7 +325,7 @@ fn estimate_score(pair: &DsPair) -> f64 {
 
     score += (buy_pressure * 15.0).min(15.0);
 
-    // Market cap sehat (max 10)
+    // Healthy market cap (max 10)
     if let Some(mc) = pair.market_cap {
         score += if mc >= 50_000.0 && mc <= 5_000_000.0 { 10.0 }
             else if mc >= 10_000.0 && mc <= 20_000_000.0 { 7.0 }
@@ -335,19 +335,19 @@ fn estimate_score(pair: &DsPair) -> f64 {
         score += 5.0; // Unknown MC - moderate score
     }
 
-    // Mint authority: backtest tidak punya data on-chain (Helius tidak dipanggil).
-    // Live bot skip token jika mint authority TIDAK direvoke.
-    // Untuk konservatif, beri 0 → backtest undercount peluang, tapi tidak misleading.
+    // Mint authority: backtest has no on-chain data (Helius not called).
+    // Live bot skips tokens with mint authority NOT revoked.
+    // Conservatively give 0 → backtest undercounts opportunities, but not misleading.
     // score += 0.0;
 
-    // Holder distribution (estimasi dari buy pressure, max 10)
+    // Holder distribution (estimated from buy pressure, max 10)
     score += (buy_pressure * 10.0).min(10.0);
 
     score.min(100.0)
 }
 
 // ============================================================
-// SIMULASI EXIT - Tentukan kapan posisi tertutup
+// EXIT SIMULATION - Determine when position closes
 // ============================================================
 
 fn simulate_exit(
@@ -360,7 +360,7 @@ fn simulate_exit(
     let trail_start = config.trailing_start_percent;
     let trail_dist = config.trailing_distance_percent;
 
-    // Simulasikan urutan harga dari entry
+    // Simulate price sequence from entry
     let checkpoints = [
         timeline.at_6h_ago,
         timeline.at_1h_ago,
@@ -380,12 +380,12 @@ fn simulate_exit(
             highest = price;
         }
 
-        // Cek take profit
+        // Check take profit
         if pct >= tp {
             return (price, ExitReason::TakeProfit);
         }
 
-        // Cek stop loss
+        // Check stop loss
         if pct <= -sl {
             return (price, ExitReason::StopLoss);
         }
@@ -408,7 +408,7 @@ fn simulate_exit(
         }
     }
 
-    // Hold sampai akhir data
+    // Hold to end of data
     (timeline.current, ExitReason::HoldToEnd)
 }
 
@@ -420,9 +420,9 @@ async fn fetch_recent_tokens(
     client: &Client,
     config: &BacktestConfig,
 ) -> Result<Vec<DsPair>> {
-    println!("[BACKTEST] Mengambil daftar token terbaru dari DexScreener...");
+    println!("[BACKTEST] Fetching latest token list from DexScreener...");
 
-    // Ambil token profiles terbaru
+    // Fetch latest token profiles
     let profiles_resp: Vec<DsTokenProfile> = client
         .get("https://api.dexscreener.com/token-profiles/latest/v1")
         .send().await?
@@ -435,12 +435,12 @@ async fn fetch_recent_tokens(
         .take(config.token_limit)
         .collect();
 
-    println!("[BACKTEST] Ditemukan {} token Solana, mengambil data pair...", solana_tokens.len());
+    println!("[BACKTEST] Found {} Solana tokens, fetching pair data...", solana_tokens.len());
 
     let mut all_pairs: Vec<DsPair> = Vec::new();
     let now_ms = Utc::now().timestamp_millis();
 
-    // Fetch pair data per batch (DexScreener max 30 token per request)
+    // Fetch pair data in batches (DexScreener max 30 tokens per request)
     for chunk in solana_tokens.chunks(30) {
         let addr_str = chunk.join(",");
         let url = format!("https://api.dexscreener.com/latest/dex/tokens/{}", addr_str);
@@ -452,21 +452,21 @@ async fn fetch_recent_tokens(
                     for pair in pairs {
                         if pair.chain_id != "solana" { continue; }
 
-                        // Filter berdasarkan umur
+                        // Filter by age
                         if let Some(created_ms) = pair.pair_created_at {
                             let age_hours = (now_ms - created_ms) / 3_600_000;
                             if age_hours < config.min_age_hours || age_hours > config.max_age_hours {
                                 continue;
                             }
                         } else {
-                            continue; // Skip token tanpa timestamp
+                            continue; // Skip tokens without timestamp
                         }
 
-                        // Filter likuiditas minimal
+                        // Filter by minimum liquidity
                         let liq = pair.liquidity.as_ref().and_then(|l| l.usd).unwrap_or(0.0);
                         if liq < config.min_liquidity_usd { continue; }
 
-                        // Filter volume minimal
+                        // Filter by minimum volume
                         let vol = pair.volume.as_ref().and_then(|v| v.h24).unwrap_or(0.0);
                         if vol < config.min_volume_h24 { continue; }
 
@@ -480,12 +480,12 @@ async fn fetch_recent_tokens(
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
 
-    println!("[BACKTEST] {} pair lolos filter → siap dianalisis", all_pairs.len());
+    println!("[BACKTEST] {} pairs passed filters → ready for analysis", all_pairs.len());
     Ok(all_pairs)
 }
 
 // ============================================================
-// INNER SIMULATION - Jalankan pada data yang sudah di-fetch
+// INNER SIMULATION - Run on already-fetched data
 // ============================================================
 
 fn simulate_on_pairs(
@@ -506,7 +506,7 @@ fn simulate_on_pairs(
         let current_price = match pair.price_usd.as_ref().and_then(|p| p.parse::<f64>().ok()) {
             Some(p) if p > 0.0 => p,
             _ => {
-                *skip_reasons.entry("Harga tidak tersedia".to_string()).or_insert(0) += 1;
+                *skip_reasons.entry("Price unavailable".to_string()).or_insert(0) += 1;
                 trades.push(BacktestTrade {
                     token_address: addr, symbol, name,
                     entry_price: 0.0, exit_price: 0.0,
@@ -516,7 +516,7 @@ fn simulate_on_pairs(
                     liquidity_usd: 0.0, volume_h24: 0.0,
                     market_cap: None, age_hours: 0.0,
                     max_profit_achievable: 0.0, max_loss_seen: 0.0,
-                    skipped_reason: Some("Harga tidak tersedia".to_string()),
+                    skipped_reason: Some("Price unavailable".to_string()),
                 });
                 continue;
             }
@@ -547,11 +547,11 @@ fn simulate_on_pairs(
         let mut skip_reason: Option<String> = None;
 
         if score < trading_config.min_score_to_buy {
-            let r = format!("Skor {:.0} < minimum {:.0}", score, trading_config.min_score_to_buy);
+            let r = format!("Score {:.0} < minimum {:.0}", score, trading_config.min_score_to_buy);
             *skip_reasons.entry(r.clone()).or_insert(0) += 1;
             skip_reason = Some(r);
         } else if liq_usd < trading_config.min_liquidity_usd {
-            let r = format!("Likuiditas ${:.0} < minimum ${:.0}", liq_usd, trading_config.min_liquidity_usd);
+            let r = format!("Liquidity ${:.0} < minimum ${:.0}", liq_usd, trading_config.min_liquidity_usd);
             *skip_reasons.entry(r.clone()).or_insert(0) += 1;
             skip_reason = Some(r);
         }
@@ -594,7 +594,7 @@ fn simulate_on_pairs(
         });
     }
 
-    // --- Hitung statistik ---
+    // --- Calculate statistics ---
     let bought: Vec<&BacktestTrade> = trades.iter().filter(|t| t.skipped_reason.is_none()).collect();
     let skipped = trades.iter().filter(|t| t.skipped_reason.is_some()).count();
     let winning: Vec<_> = bought.iter().filter(|t| t.profit_pct > 0.5).cloned().collect();
@@ -642,169 +642,24 @@ fn simulate_on_pairs(
         profit_factor,
         avg_profit_pct: avg_profit,
         avg_loss_pct: avg_loss,
-        best_trade_pct:    best.map(|t| t.profit_pct).unwrap_or(0.0),
+        best_trade_pct: best.map(|t| t.profit_pct).unwrap_or(0.0),
         best_trade_symbol: best.map(|t| t.symbol.clone()).unwrap_or_default(),
-        worst_trade_pct:    worst.map(|t| t.profit_pct).unwrap_or(0.0),
+        worst_trade_pct: worst.map(|t| t.profit_pct).unwrap_or(0.0),
         worst_trade_symbol: worst.map(|t| t.symbol.clone()).unwrap_or_default(),
-        avg_hold_periods: format!(
-            "TP:{} | SL:{} | Trail:{} | Hold:{}",
-            tp_count, sl_count, tr_count, hold_count
-        ),
+        avg_hold_periods: format!("TP:{} SL:{} Trail:{} Hold:{}", tp_count, sl_count, tr_count, hold_count),
         total_sol_deployed,
-        config_tp:              trading_config.take_profit_percent,
-        config_sl:              trading_config.stop_loss_percent,
-        config_trailing_start:  trading_config.trailing_start_percent,
-        config_trailing_dist:   trading_config.trailing_distance_percent,
-        config_min_score:       trading_config.min_score_to_buy,
+        config_tp: trading_config.take_profit_percent,
+        config_sl: trading_config.stop_loss_percent,
+        config_trailing_start: trading_config.trailing_start_percent,
+        config_trailing_dist: trading_config.trailing_distance_percent,
+        config_min_score: trading_config.min_score_to_buy,
         trades,
         skip_reasons,
     }
 }
 
 // ============================================================
-// SCENARIO - Preset konfigurasi untuk compare mode
-// ============================================================
-
-#[derive(Debug, Clone)]
-pub struct CompareScenario {
-    pub name: String,
-    pub label: String,
-    pub config: TradingConfig,
-}
-
-fn build_trading_config(
-    tp: f64, sl: f64, trail_start: f64, trail_dist: f64, min_score: f64,
-) -> TradingConfig {
-    let max_pos = std::env::var("MAX_POSITION_SOL")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(0.5_f64);
-    TradingConfig {
-        trading_enabled: true,
-        max_position_sol: max_pos,
-        min_position_sol: (max_pos * 0.1_f64).max(0.01_f64),
-        take_profit_percent: tp,
-        stop_loss_percent: sl,
-        trailing_start_percent: trail_start,
-        trailing_distance_percent: trail_dist,
-        min_score_to_buy: min_score,
-        min_liquidity_usd: std::env::var("MIN_LIQUIDITY_USD")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0),
-        default_slippage: 1.0,
-        max_positions: 999,
-        max_hold_minutes: 0,
-        time_exit_threshold_pct: 5.0,
-        // 3-stage TP dinonaktifkan di backtest (simulasi single TP per skenario)
-        tp1_percent: 0.0,
-        tp1_sell_percent: 33.0,
-        tp2_percent: 0.0,
-        tp2_sell_percent: 50.0,
-    }
-}
-
-pub fn default_scenarios(base_config: &TradingConfig) -> Vec<CompareScenario> {
-    vec![
-        // 1. Konfigurasi saat ini (dari .env)
-        CompareScenario {
-            name: "Saat Ini (.env)".to_string(),
-            label: format!("TP{:.0}/SL{:.0}/Skor{:.0}/Trail{:.0}-{:.0}",
-                base_config.take_profit_percent,
-                base_config.stop_loss_percent,
-                base_config.min_score_to_buy,
-                base_config.trailing_start_percent,
-                base_config.trailing_distance_percent),
-            config: TradingConfig {
-                trading_enabled: true,
-                max_positions: 999,
-                ..*base_config
-            },
-        },
-        // 2. Scalping - ambil untung cepat, cut loss cepat
-        CompareScenario {
-            name: "Scalping".to_string(),
-            label: "TP15/SL8/Skor80/Trail10-3".to_string(),
-            config: build_trading_config(15.0, 8.0, 10.0, 3.0, 80.0),
-        },
-        // 3. Agresif - target moderat, toleransi longgar
-        CompareScenario {
-            name: "Agresif".to_string(),
-            label: "TP25/SL12/Skor80/Trail15-4".to_string(),
-            config: build_trading_config(25.0, 12.0, 15.0, 4.0, 80.0),
-        },
-        // 4. Default Optimal - balance antara TP dan SL
-        CompareScenario {
-            name: "Default Optimal".to_string(),
-            label: "TP40/SL15/Skor85/Trail20-5".to_string(),
-            config: build_trading_config(40.0, 15.0, 20.0, 5.0, 85.0),
-        },
-        // 5. Konservatif - filter ketat, biarkan profit jalan
-        CompareScenario {
-            name: "Konservatif".to_string(),
-            label: "TP60/SL20/Skor88/Trail30-7".to_string(),
-            config: build_trading_config(60.0, 20.0, 30.0, 7.0, 88.0),
-        },
-        // 6. Ultra-selektif - hanya token terbaik, target besar
-        CompareScenario {
-            name: "Ultra-Selektif".to_string(),
-            label: "TP80/SL15/Skor92/Trail40-5".to_string(),
-            config: build_trading_config(80.0, 15.0, 40.0, 5.0, 92.0),
-        },
-        // 7. Trailing-Focused - andalkan trailing stop sepenuhnya
-        CompareScenario {
-            name: "Trailing-Focused".to_string(),
-            label: "TP200/SL15/Skor85/Trail15-5".to_string(),
-            config: build_trading_config(200.0, 15.0, 15.0, 5.0, 85.0),
-        },
-        // 8. Tight SL - lindungi modal lebih ketat
-        CompareScenario {
-            name: "Tight Stop-Loss".to_string(),
-            label: "TP40/SL8/Skor85/Trail20-3".to_string(),
-            config: build_trading_config(40.0, 8.0, 20.0, 3.0, 85.0),
-        },
-    ]
-}
-
-// ============================================================
-// HASIL COMPARE - Ringkasan per skenario
-// ============================================================
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ScenarioResult {
-    pub rank: usize,
-    pub name: String,
-    pub label: String,
-    pub tokens_bought: usize,
-    pub win_rate_pct: f64,
-    pub roi_pct: f64,
-    pub net_pnl_sol: f64,
-    pub profit_factor: f64,
-    pub avg_profit_pct: f64,
-    pub avg_loss_pct: f64,
-    pub best_trade_pct: f64,
-    pub worst_trade_pct: f64,
-    pub tp_exits: usize,
-    pub sl_exits: usize,
-    pub trail_exits: usize,
-    pub hold_exits: usize,
-    pub score: f64,    // skor komposit untuk ranking
-}
-
-#[derive(Debug, Serialize)]
-pub struct CompareResult {
-    pub run_time: DateTime<Utc>,
-    pub tokens_dataset: usize,
-    pub scenarios: Vec<ScenarioResult>,
-    pub winner: String,
-    pub winner_metric: String,
-}
-
-fn composite_score(r: &BacktestResult) -> f64 {
-    // Skor komposit: gabungan ROI, win rate, dan profit factor
-    // ROI berbobot 50%, win rate 30%, profit factor 20%
-    let pf = r.profit_factor.min(10.0); // cap di 10 untuk menghindari infinite
-    (r.roi_pct * 0.5) + (r.win_rate_pct * 0.3) + (pf * 10.0 * 0.2)
-}
-
-// ============================================================
-// ENGINE UTAMA
+// PUBLIC ENTRY POINTS
 // ============================================================
 
 pub async fn run_backtest(
@@ -813,417 +668,179 @@ pub async fn run_backtest(
     bt_config: &BacktestConfig,
 ) -> Result<BacktestResult> {
     let run_time = Utc::now();
-    println!("\n{}", "=".repeat(60));
-    println!(" BACKTESTING ENGINE - Solana Token Bot");
-    println!("{}", "=".repeat(60));
-    println!(" Konfigurasi Strategi:");
-    println!("   Min Skor     : {:.0}", trading_config.min_score_to_buy);
-    println!("   Min Likuiditas: ${:.0}", trading_config.min_liquidity_usd);
-    println!("   Take Profit  : +{:.0}%", trading_config.take_profit_percent);
-    println!("   Stop Loss    : -{:.0}%", trading_config.stop_loss_percent);
-    println!("   Trailing Aktif: +{:.0}% | Jarak: {:.0}%",
-        trading_config.trailing_start_percent,
-        trading_config.trailing_distance_percent);
-    println!("   Token limit  : {}", bt_config.token_limit);
-    println!("   Umur token   : {}-{} jam", bt_config.min_age_hours, bt_config.max_age_hours);
-    println!("{}\n", "=".repeat(60));
-
     let pairs = fetch_recent_tokens(client, bt_config).await?;
-
-    if pairs.is_empty() {
-        anyhow::bail!("Tidak ada token yang ditemukan. Coba perluas filter (BACKTEST_MIN_AGE_HOURS / BACKTEST_MIN_LIQUIDITY).");
-    }
-
-    let result = simulate_on_pairs(&pairs, trading_config, run_time);
-    Ok(result)
+    Ok(simulate_on_pairs(&pairs, trading_config, run_time))
 }
 
 // ============================================================
-// COMPARE MODE - Fetch sekali, jalankan semua skenario
+// COMPARE MODE - Compare multiple strategy presets
 // ============================================================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScenarioResult {
+    pub name: String,
+    pub label: String,
+    pub result: BacktestResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompareResult {
+    pub run_time: DateTime<Utc>,
+    pub scenarios: Vec<ScenarioResult>,
+}
 
 pub async fn run_backtest_compare(
     client: &Client,
-    base_config: &TradingConfig,
+    _base_config: &TradingConfig,
     bt_config: &BacktestConfig,
-    custom_scenarios: Option<Vec<CompareScenario>>,
+    _extra: Option<()>,
 ) -> Result<CompareResult> {
     let run_time = Utc::now();
-
-    println!("\n{}", "=".repeat(65));
-    println!(" COMPARE MODE - Perbandingan Konfigurasi Strategi");
-    println!("{}", "=".repeat(65));
-    println!(" Dataset: {} token | Umur: {}-{} jam | Min Liq: ${:.0}",
-        bt_config.token_limit, bt_config.min_age_hours,
-        bt_config.max_age_hours, bt_config.min_liquidity_usd);
-    println!("{}\n", "=".repeat(65));
-
-    // Fetch data SEKALI, dipakai untuk semua skenario
-    println!("[COMPARE] Mengambil dataset token (1x fetch untuk semua skenario)...");
+    println!("[COMPARE] Fetching token data (shared across all scenarios)...");
     let pairs = fetch_recent_tokens(client, bt_config).await?;
 
-    if pairs.is_empty() {
-        anyhow::bail!("Tidak ada token ditemukan. Perluas filter terlebih dahulu.");
+    let scenarios_config: Vec<(&str, TradingConfig)> = vec![
+        ("Conservative", TradingConfig { trading_enabled: true, max_position_sol: 0.05, min_position_sol: 0.05, take_profit_percent: 30.0, stop_loss_percent: 10.0, trailing_start_percent: 15.0, trailing_distance_percent: 5.0, min_score_to_buy: 85.0, min_liquidity_usd: 10_000.0, default_slippage: 1.5, max_positions: 3, max_hold_minutes: 60, time_exit_threshold_pct: 5.0, tp1_percent: 0.0, tp1_sell_percent: 33.0, tp2_percent: 0.0, tp2_sell_percent: 50.0 }),
+        ("Scalping",     TradingConfig { trading_enabled: true, max_position_sol: 0.05, min_position_sol: 0.05, take_profit_percent: 35.0, stop_loss_percent: 8.0,  trailing_start_percent: 12.0, trailing_distance_percent: 3.0, min_score_to_buy: 87.0, min_liquidity_usd: 5_000.0,  default_slippage: 1.5, max_positions: 2, max_hold_minutes: 40, time_exit_threshold_pct: 3.0, tp1_percent: 12.0, tp1_sell_percent: 33.0, tp2_percent: 20.0, tp2_sell_percent: 50.0 }),
+        ("Aggressive",   TradingConfig { trading_enabled: true, max_position_sol: 0.1,  min_position_sol: 0.05, take_profit_percent: 50.0, stop_loss_percent: 15.0, trailing_start_percent: 25.0, trailing_distance_percent: 8.0, min_score_to_buy: 80.0, min_liquidity_usd: 5_000.0,  default_slippage: 2.0, max_positions: 5, max_hold_minutes: 0,  time_exit_threshold_pct: 5.0, tp1_percent: 0.0, tp1_sell_percent: 33.0, tp2_percent: 0.0, tp2_sell_percent: 50.0 }),
+        ("Balanced",     TradingConfig { trading_enabled: true, max_position_sol: 0.05, min_position_sol: 0.05, take_profit_percent: 40.0, stop_loss_percent: 12.0, trailing_start_percent: 20.0, trailing_distance_percent: 5.0, min_score_to_buy: 85.0, min_liquidity_usd: 8_000.0,  default_slippage: 1.5, max_positions: 3, max_hold_minutes: 50, time_exit_threshold_pct: 4.0, tp1_percent: 0.0, tp1_sell_percent: 33.0, tp2_percent: 0.0, tp2_sell_percent: 50.0 }),
+    ];
+
+    let mut scenarios = Vec::new();
+    for (name, config) in &scenarios_config {
+        println!("[COMPARE] Running scenario: {}", name);
+        let result = simulate_on_pairs(&pairs, config, run_time);
+        let label = format!("TP{}/SL{}/Trail{}", config.take_profit_percent, config.stop_loss_percent, config.trailing_start_percent);
+        scenarios.push(ScenarioResult { name: name.to_string(), label, result });
     }
 
-    println!("[COMPARE] Dataset: {} pair siap → menjalankan {} skenario...\n",
-        pairs.len(),
-        custom_scenarios.as_ref().map(|s| s.len()).unwrap_or(8));
+    // Sort by net P&L descending
+    scenarios.sort_by(|a, b| b.result.net_pnl_sol.partial_cmp(&a.result.net_pnl_sol).unwrap());
 
-    let scenarios = custom_scenarios.unwrap_or_else(|| default_scenarios(base_config));
-    let mut scenario_results: Vec<ScenarioResult> = Vec::new();
-
-    for (i, scenario) in scenarios.iter().enumerate() {
-        print!("[COMPARE] ({}/{}) Skenario \"{}\" ... ",
-            i + 1, scenarios.len(), scenario.name);
-
-        let result = simulate_on_pairs(&pairs, &scenario.config, run_time);
-
-        let pf_capped = result.profit_factor.min(10.0);
-        let score = composite_score(&result);
-
-        let tp_exits    = result.trades.iter().filter(|t| t.exit_reason == ExitReason::TakeProfit && t.skipped_reason.is_none()).count();
-        let sl_exits    = result.trades.iter().filter(|t| t.exit_reason == ExitReason::StopLoss && t.skipped_reason.is_none()).count();
-        let trail_exits = result.trades.iter().filter(|t| t.exit_reason == ExitReason::TrailingStop && t.skipped_reason.is_none()).count();
-        let hold_exits  = result.trades.iter().filter(|t| t.exit_reason == ExitReason::HoldToEnd && t.skipped_reason.is_none()).count();
-
-        println!("ROI:{:+.1}% | WR:{:.0}% | PF:{:.1}",
-            result.roi_pct, result.win_rate_pct, pf_capped);
-
-        scenario_results.push(ScenarioResult {
-            rank: 0, // akan diisi setelah sort
-            name: scenario.name.clone(),
-            label: scenario.label.clone(),
-            tokens_bought: result.tokens_bought,
-            win_rate_pct: result.win_rate_pct,
-            roi_pct: result.roi_pct,
-            net_pnl_sol: result.net_pnl_sol,
-            profit_factor: result.profit_factor,
-            avg_profit_pct: result.avg_profit_pct,
-            avg_loss_pct: result.avg_loss_pct,
-            best_trade_pct: result.best_trade_pct,
-            worst_trade_pct: result.worst_trade_pct,
-            tp_exits, sl_exits, trail_exits, hold_exits,
-            score,
-        });
-    }
-
-    // Sort berdasarkan composite score
-    scenario_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-    for (i, s) in scenario_results.iter_mut().enumerate() {
-        s.rank = i + 1;
-    }
-
-    let winner = scenario_results.first()
-        .map(|s| s.name.clone())
-        .unwrap_or_default();
-    let winner_metric = scenario_results.first()
-        .map(|s| format!("ROI:{:+.1}% | WR:{:.0}% | PF:{:.2}",
-            s.roi_pct, s.win_rate_pct, s.profit_factor.min(10.0)))
-        .unwrap_or_default();
-
-    Ok(CompareResult {
-        run_time,
-        tokens_dataset: pairs.len(),
-        scenarios: scenario_results,
-        winner,
-        winner_metric,
-    })
+    Ok(CompareResult { run_time, scenarios })
 }
 
 // ============================================================
-// PRINT LAPORAN KE CONSOLE
+// REPORTING
 // ============================================================
 
-pub fn print_backtest_report(r: &BacktestResult) {
-    let pf_str = if r.profit_factor.is_infinite() {
-        "∞".to_string()
-    } else {
-        format!("{:.2}", r.profit_factor)
-    };
+pub fn print_backtest_report(result: &BacktestResult) {
+    println!("\n{}", "═".repeat(60));
+    println!("  BACKTEST RESULTS — {}", result.run_time.format("%Y-%m-%d %H:%M UTC"));
+    println!("{}", "═".repeat(60));
+    println!("  Config: TP={:.0}% | SL={:.0}% | Trail@{:.0}% dist{:.0}% | MinScore={:.0}",
+        result.config_tp, result.config_sl,
+        result.config_trailing_start, result.config_trailing_dist,
+        result.config_min_score);
+    println!("{}", "─".repeat(60));
+    println!("  Tokens analyzed : {}", result.tokens_analyzed);
+    println!("  Tokens bought   : {} | Skipped: {}", result.tokens_bought, result.tokens_skipped);
+    println!("  Win / Loss / BE : {} / {} / {}", result.winning_trades, result.losing_trades, result.breakeven_trades);
+    println!("  Win Rate        : {:.1}%", result.win_rate_pct);
+    println!("  Profit Factor   : {:.2}", result.profit_factor);
+    println!("{}", "─".repeat(60));
+    println!("  Total Profit    : +{:.5} SOL", result.total_profit_sol);
+    println!("  Total Loss      : -{:.5} SOL", result.total_loss_sol);
+    println!("  Net P&L         : {}{:.5} SOL", if result.net_pnl_sol >= 0.0 { "+" } else { "" }, result.net_pnl_sol);
+    println!("  ROI             : {}{:.2}%", if result.roi_pct >= 0.0 { "+" } else { "" }, result.roi_pct);
+    println!("  SOL Deployed    : {:.4} SOL", result.total_sol_deployed);
+    println!("{}", "─".repeat(60));
+    println!("  Best Trade      : +{:.1}% ({})", result.best_trade_pct, result.best_trade_symbol);
+    println!("  Worst Trade     : {:.1}% ({})", result.worst_trade_pct, result.worst_trade_symbol);
+    println!("  Avg Profit      : +{:.1}%", result.avg_profit_pct);
+    println!("  Avg Loss        : {:.1}%", result.avg_loss_pct);
+    println!("  Exits           : {}", result.avg_hold_periods);
+    println!("{}", "═".repeat(60));
 
-    println!("\n{}", "=".repeat(60));
-    println!(" HASIL BACKTEST - {}", r.run_time.format("%Y-%m-%d %H:%M UTC"));
-    println!("{}", "=".repeat(60));
-
-    println!("\n📊 RINGKASAN");
-    println!("   Token dianalisis  : {}", r.tokens_analyzed);
-    println!("   Token dibeli      : {}", r.tokens_bought);
-    println!("   Token di-skip     : {}", r.tokens_skipped);
-    println!("   SOL yang digunakan: {:.4} SOL (virtual)", r.total_sol_deployed);
-
-    println!("\n💰 KINERJA");
-    println!("   Net P&L     : {}{:.4} SOL", if r.net_pnl_sol >= 0.0 { "+" } else { "" }, r.net_pnl_sol);
-    println!("   ROI         : {}{:.1}%", if r.roi_pct >= 0.0 { "+" } else { "" }, r.roi_pct);
-    println!("   Profit      : +{:.4} SOL", r.total_profit_sol);
-    println!("   Loss        : -{:.4} SOL", r.total_loss_sol);
-
-    println!("\n📈 STATISTIK");
-    println!("   Win Rate    : {:.1}%", r.win_rate_pct);
-    println!("   Profit Factor: {}", pf_str);
-    println!("   Avg Profit  : +{:.1}%", r.avg_profit_pct);
-    println!("   Avg Loss    : {:.1}%", r.avg_loss_pct);
-    println!("   Menang: {} | Kalah: {} | Impas: {}",
-        r.winning_trades, r.losing_trades, r.breakeven_trades);
-
-    println!("\n🏆 TRADE TERBAIK & TERBURUK");
-    if !r.best_trade_symbol.is_empty() {
-        println!("   Best : {} → +{:.1}%", r.best_trade_symbol, r.best_trade_pct);
-    }
-    if !r.worst_trade_symbol.is_empty() {
-        println!("   Worst: {} → {:.1}%", r.worst_trade_symbol, r.worst_trade_pct);
-    }
-
-    println!("\n🚪 DISTRIBUSI EXIT");
-    println!("   {}", r.avg_hold_periods);
-
-    println!("\n⚙️ KONFIGURASI YANG DIUJI");
-    println!("   Min Skor     : {:.0}", r.config_min_score);
-    println!("   Take Profit  : +{:.0}%", r.config_tp);
-    println!("   Stop Loss    : -{:.0}%", r.config_sl);
-    println!("   Trailing Aktif: +{:.0}% | Jarak: {:.0}%", r.config_trailing_start, r.config_trailing_dist);
-
-    // Top 10 trades
-    let mut sorted = r.trades.iter()
-        .filter(|t| t.skipped_reason.is_none())
-        .collect::<Vec<_>>();
-    sorted.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap());
-
-    if !sorted.is_empty() {
-        println!("\n🏅 TOP 10 TRADE (berdasarkan P&L):");
-        for (i, t) in sorted.iter().take(10).enumerate() {
-            let exit_label = match t.exit_reason {
-                ExitReason::TakeProfit   => "TP",
-                ExitReason::StopLoss     => "SL",
-                ExitReason::TrailingStop => "TRAIL",
-                ExitReason::HoldToEnd    => "HOLD",
-            };
-            println!(
-                "   {:2}. {:8} | {:>7.1}% | {:<5} | Skor:{:.0} | Liq:${:.0}",
-                i + 1, t.symbol,
-                t.profit_pct, exit_label,
-                t.score_estimated, t.liquidity_usd
-            );
-        }
-    }
-
-    // Skip reason summary
-    if !r.skip_reasons.is_empty() {
-        println!("\n⏭ ALASAN SKIP TERBANYAK:");
-        let mut reasons: Vec<_> = r.skip_reasons.iter().collect();
+    if !result.skip_reasons.is_empty() {
+        println!("\n  Skip Reasons:");
+        let mut reasons: Vec<_> = result.skip_reasons.iter().collect();
         reasons.sort_by(|a, b| b.1.cmp(a.1));
         for (reason, count) in reasons.iter().take(5) {
-            println!("   {} × {}", count, reason);
+            println!("    • {} × {}", count, reason);
         }
     }
-
-    println!("\n{}", "=".repeat(60));
 }
 
-// ============================================================
-// FORMAT LAPORAN TELEGRAM
-// ============================================================
+pub fn print_compare_table(result: &CompareResult) {
+    println!("\n{}", "═".repeat(80));
+    println!("  STRATEGY COMPARISON — {}", result.run_time.format("%Y-%m-%d %H:%M UTC"));
+    println!("{}", "═".repeat(80));
+    println!("  {:<15} {:>8} {:>8} {:>8} {:>10} {:>8}",
+        "Strategy", "WinRate", "PF", "ROI%", "NetPnL", "Trades");
+    println!("{}", "─".repeat(80));
+    for s in &result.scenarios {
+        println!("  {:<15} {:>7.1}% {:>8.2} {:>7.1}% {:>+10.5} {:>8}",
+            s.name,
+            s.result.win_rate_pct,
+            s.result.profit_factor,
+            s.result.roi_pct,
+            s.result.net_pnl_sol,
+            s.result.tokens_bought,
+        );
+    }
+    println!("{}", "═".repeat(80));
+}
 
-pub fn format_backtest_telegram(r: &BacktestResult) -> String {
-    let roi_emoji = if r.roi_pct >= 20.0 { "🚀" }
-        else if r.roi_pct >= 0.0 { "✅" }
-        else if r.roi_pct >= -10.0 { "⚠️" }
-        else { "❌" };
-
-    let pf_str = if r.profit_factor.is_infinite() {
-        "∞".to_string()
-    } else {
-        format!("{:.2}", r.profit_factor)
-    };
-
-    let mut sorted_trades = r.trades.iter()
-        .filter(|t| t.skipped_reason.is_none())
-        .collect::<Vec<_>>();
-    sorted_trades.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap());
-
-    let top5: String = sorted_trades.iter().take(5)
-        .enumerate()
-        .map(|(i, t)| {
-            let exit = match t.exit_reason {
-                ExitReason::TakeProfit   => "TP",
-                ExitReason::StopLoss     => "SL",
-                ExitReason::TrailingStop => "TRAIL",
-                ExitReason::HoldToEnd    => "HOLD",
-            };
-            let em = if t.profit_pct >= 0.0 { "✅" } else { "❌" };
-            format!("{}. {} {} {}{:.1}% [{}]",
-                i + 1, em, t.symbol,
-                if t.profit_pct >= 0.0 { "+" } else { "" },
-                t.profit_pct, exit)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
+pub fn format_backtest_telegram(result: &BacktestResult) -> String {
     format!(
-        "📊 **LAPORAN BACKTEST**\n\
+        "📊 **BACKTEST RESULTS**\n\
         ═══════════════════════════════\n\
-        🕐 {}\n\n\
-        📋 **Ringkasan:**\n\
-        🔍 Token dianalisis: **{}**\n\
-        🛒 Token dibeli: **{}** | ⏭ Skip: **{}**\n\
-        💼 SOL digunakan: **{:.4} SOL** (virtual)\n\n\
-        {} **Kinerja:**\n\
-        💰 Net P&L: **{}{:.4} SOL**\n\
-        📈 ROI: **{}{:.1}%**\n\
-        💚 Total Profit: **+{:.4} SOL**\n\
-        ❤️ Total Loss: **-{:.4} SOL**\n\n\
-        🎯 **Statistik:**\n\
-        ✅ Menang: **{}** | ❌ Kalah: **{}** | ➖ Impas: **{}**\n\
-        📊 Win Rate: **{:.1}%**\n\
-        ⚖️ Profit Factor: **{}**\n\
-        📈 Avg Profit: **+{:.1}%** | 📉 Avg Loss: **{:.1}%**\n\n\
-        🏆 Best: **{}** (+{:.1}%) | Worst: **{}** ({:.1}%)\n\n\
-        🚪 Exit: {}\n\n\
-        ⚙️ **Konfigurasi:**\n\
-        Min Skor: {:.0} | TP: +{:.0}% | SL: -{:.0}%\n\
-        Trailing: +{:.0}% → jarak {:.0}%\n\n\
-        🏅 **Top 5 Trade:**\n\
-        {}\n\n\
-        ═══════════════════════════════\n\
-        ⚠️ _Backtest bukan jaminan performa masa depan_",
-        r.run_time.format("%Y-%m-%d %H:%M UTC"),
-        r.tokens_analyzed, r.tokens_bought, r.tokens_skipped,
-        r.total_sol_deployed,
-        roi_emoji,
-        if r.net_pnl_sol >= 0.0 { "+" } else { "" }, r.net_pnl_sol,
-        if r.roi_pct >= 0.0 { "+" } else { "" }, r.roi_pct,
-        r.total_profit_sol, r.total_loss_sol,
-        r.winning_trades, r.losing_trades, r.breakeven_trades,
-        r.win_rate_pct, pf_str,
-        r.avg_profit_pct, r.avg_loss_pct,
-        r.best_trade_symbol, r.best_trade_pct,
-        r.worst_trade_symbol, r.worst_trade_pct,
-        r.avg_hold_periods,
-        r.config_min_score, r.config_tp, r.config_sl,
-        r.config_trailing_start, r.config_trailing_dist,
-        if top5.is_empty() { "Tidak ada trade".to_string() } else { top5 },
+        ⚙️ Config: TP={:.0}% | SL={:.0}% | Score≥{:.0}\n\n\
+        📈 Tokens analyzed: **{}**\n\
+        🛒 Traded: **{}** | Skipped: **{}**\n\
+        ✅ Win: **{}** | ❌ Loss: **{}** | ➖ BE: **{}**\n\
+        📊 Win Rate: **{:.1}%** | Profit Factor: **{:.2}**\n\n\
+        💰 Net P&L: **{}{:.5} SOL**\n\
+        📈 ROI: **{}{:.2}%**\n\
+        🥇 Best: **+{:.1}%** ({}) | 💔 Worst: **{:.1}%** ({})",
+        result.config_tp, result.config_sl, result.config_min_score,
+        result.tokens_analyzed,
+        result.tokens_bought, result.tokens_skipped,
+        result.winning_trades, result.losing_trades, result.breakeven_trades,
+        result.win_rate_pct, result.profit_factor,
+        if result.net_pnl_sol >= 0.0 { "+" } else { "" }, result.net_pnl_sol,
+        if result.roi_pct >= 0.0 { "+" } else { "" }, result.roi_pct,
+        result.best_trade_pct, result.best_trade_symbol,
+        result.worst_trade_pct, result.worst_trade_symbol,
     )
 }
 
-// ============================================================
-// PRINT TABEL COMPARE KE CONSOLE
-// ============================================================
+pub fn format_compare_telegram(result: &CompareResult) -> String {
+    let mut msg = format!(
+        "📊 **STRATEGY COMPARISON**\n\
+        ═══════════════════════════════\n\
+        🕐 {}\n\n",
+        result.run_time.format("%Y-%m-%d %H:%M UTC")
+    );
 
-pub fn print_compare_table(r: &CompareResult) {
-    let sep = "─".repeat(100);
-    let double = "═".repeat(100);
-
-    println!("\n{}", double);
-    println!(" HASIL COMPARE - {} | Dataset: {} token",
-        r.run_time.format("%Y-%m-%d %H:%M UTC"), r.tokens_dataset);
-    println!("{}", double);
-
-    // Header
-    println!(" {:>3} {:<22} {:>6} {:>7} {:>8} {:>8} {:>7} {:>8} {:>8} {:>6}",
-        "Rank", "Nama Strategi", "Trade", "WinRate", "ROI%", "P&L(SOL)", "PF", "AvgProfit", "AvgLoss", "TP|SL|TR");
-    println!("{}", sep);
-
-    for s in &r.scenarios {
-        let rank_badge = if s.rank == 1 { "🥇".to_string() }
-            else if s.rank == 2 { "🥈".to_string() }
-            else if s.rank == 3 { "🥉".to_string() }
-            else { format!(" {:>2}.", s.rank) };
-
-        let roi_sign = if s.roi_pct >= 0.0 { "+" } else { "" };
-        let pnl_sign = if s.net_pnl_sol >= 0.0 { "+" } else { "" };
-        let pf_str = if s.profit_factor.is_infinite() { "  ∞".to_string() }
-            else { format!("{:>7.2}", s.profit_factor.min(99.99)) };
-
-        println!(" {} {:<22} {:>6} {:>6.1}% {:>7.1}% {:>8.4} {:>7} {:>7.1}% {:>7.1}% {:>3}|{:>3}|{:>3}",
-            rank_badge, s.name,
-            s.tokens_bought,
-            s.win_rate_pct,
-            format!("{}{:.1}", roi_sign, s.roi_pct),
-            format!("{}{:.4}", pnl_sign, s.net_pnl_sol),
-            pf_str,
-            s.avg_profit_pct,
-            s.avg_loss_pct,
-            s.tp_exits, s.sl_exits, s.trail_exits,
-        );
-
-        // Sub-baris konfigurasi (indent)
-        println!("     ↳ {}", s.label);
+    for (i, s) in result.scenarios.iter().enumerate() {
+        let medal = match i { 0 => "🥇", 1 => "🥈", 2 => "🥉", _ => "  " };
+        msg.push_str(&format!(
+            "{} **{}**: Win {:.1}% | PF {:.2} | Net {}{:.5} SOL\n",
+            medal, s.name,
+            s.result.win_rate_pct,
+            s.result.profit_factor,
+            if s.result.net_pnl_sol >= 0.0 { "+" } else { "" },
+            s.result.net_pnl_sol,
+        ));
     }
 
-    println!("{}", sep);
-
-    // Pemenang
-    println!("\n🏆 STRATEGI TERBAIK: \"{}\"", r.winner);
-    println!("   {}", r.winner_metric);
-
-    // Keterangan metrik ranking
-    println!("\n📝 Ranking berdasarkan skor komposit:");
-    println!("   ROI (50%) + Win Rate (30%) + Profit Factor (20%)");
-    println!("   TP=Take Profit | SL=Stop Loss | TR=Trailing Stop exits");
-    println!("{}", double);
+    msg
 }
 
-// ============================================================
-// FORMAT COMPARE UNTUK TELEGRAM
-// ============================================================
-
-pub fn format_compare_telegram(r: &CompareResult) -> String {
-    let rows: String = r.scenarios.iter().map(|s| {
-        let badge = if s.rank == 1 { "🥇" }
-            else if s.rank == 2 { "🥈" }
-            else if s.rank == 3 { "🥉" }
-            else { "▫️" };
-
-        let pf_str = if s.profit_factor.is_infinite() { "∞".to_string() }
-            else { format!("{:.2}", s.profit_factor.min(99.99)) };
-
-        format!(
-            "{} **{}** — `{}`\n\
-             ROI: **{}{:.1}%** | WR: **{:.0}%** | PF: **{}**\n\
-             Avg: {:+.1}%/{:.1}% | TP:{} SL:{} TR:{}",
-            badge, s.name, s.label,
-            if s.roi_pct >= 0.0 { "+" } else { "" }, s.roi_pct,
-            s.win_rate_pct, pf_str,
-            s.avg_profit_pct, s.avg_loss_pct,
-            s.tp_exits, s.sl_exits, s.trail_exits,
-        )
-    }).collect::<Vec<_>>().join("\n\n");
-
-    format!(
-        "📊 **PERBANDINGAN STRATEGI**\n\
-        ═══════════════════════════════\n\
-        🕐 {}\n\
-        🗂 Dataset: **{}** token\n\n\
-        {}\n\n\
-        ═══════════════════════════════\n\
-        🏆 **Pemenang: {}**\n\
-        {}\n\n\
-        📝 Ranking: ROI(50%) + WinRate(30%) + PF(20%)\n\
-        ⚠️ _Backtest bukan jaminan performa masa depan_",
-        r.run_time.format("%Y-%m-%d %H:%M UTC"),
-        r.tokens_dataset,
-        rows,
-        r.winner,
-        r.winner_metric,
-    )
-}
-
-// ============================================================
-// SAVE HASIL KE FILE
-// ============================================================
-
-pub fn save_backtest_result(result: &BacktestResult) -> Result<()> {
+pub fn save_backtest_result(result: &BacktestResult) -> Result<(), Box<dyn std::error::Error>> {
     let filename = format!("backtest_{}.json", result.run_time.format("%Y%m%d_%H%M%S"));
     let json = serde_json::to_string_pretty(result)?;
     std::fs::write(&filename, json)?;
-    println!("[BACKTEST] Hasil disimpan ke {}", filename);
+    println!("[BACKTEST] Results saved to {}", filename);
     Ok(())
 }
 
-pub fn save_compare_result(result: &CompareResult) -> Result<()> {
+pub fn save_compare_result(result: &CompareResult) -> Result<(), Box<dyn std::error::Error>> {
     let filename = format!("compare_{}.json", result.run_time.format("%Y%m%d_%H%M%S"));
     let json = serde_json::to_string_pretty(result)?;
     std::fs::write(&filename, json)?;
-    println!("[COMPARE] Hasil disimpan ke {}", filename);
+    println!("[COMPARE] Results saved to {}", filename);
     Ok(())
 }

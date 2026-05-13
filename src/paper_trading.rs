@@ -1,6 +1,6 @@
 // ============================================================
-// PAPER TRADING - Simulasi trading tanpa uang nyata
-// Gunakan untuk menguji strategi sebelum live trading
+// PAPER TRADING - Simulated trading without real money
+// Use to test strategies before going live
 // ============================================================
 
 use chrono::{DateTime, Utc};
@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ============================================================
-// KONSTANTA MAINNET - sama persis dengan biaya transaksi nyata
+// MAINNET CONSTANTS - identical to real transaction costs
 // ============================================================
 
-/// Biaya jaringan Solana per transaksi (base fee 5000 lamport + priority fee ~20000 lamport)
-/// Total ~25000 lamport = 0.000025 SOL per tx — angka konservatif/realistis
+/// Solana network fee per transaction (base fee 5000 lamports + priority fee ~20000 lamports)
+/// Total ~25000 lamports = 0.000025 SOL per tx — conservative/realistic figure
 pub const NETWORK_FEE_SOL: f64 = 0.000025;
 
 // ============================================================
@@ -56,7 +56,7 @@ impl PaperConfig {
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(85.0),
             min_liquidity_usd: std::env::var("MIN_LIQUIDITY_USD")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0),
-            // Slippage default sama dengan konfigurasi live trading
+            // Default slippage matches live trading configuration
             default_slippage: std::env::var("DEFAULT_SLIPPAGE")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
             max_positions: std::env::var("MAX_POSITIONS")
@@ -68,7 +68,7 @@ impl PaperConfig {
 }
 
 // ============================================================
-// PAPER POSITION - Posisi simulasi
+// PAPER POSITION - Simulated position
 // ============================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,9 +77,9 @@ pub struct PaperPosition {
     pub symbol: String,
     pub name: String,
     pub buy_price_usd: f64,
-    /// SOL yang masih dipegang (dikurangi saat partial sell)
+    /// SOL still held (reduced on partial sell)
     pub amount_sol: f64,
-    /// Token yang masih dipegang (dikurangi saat partial sell)
+    /// Token amount still held (reduced on partial sell)
     pub token_amount: f64,
     pub highest_price: f64,
     pub trailing_stop_active: bool,
@@ -87,9 +87,9 @@ pub struct PaperPosition {
     pub entry_time: DateTime<Utc>,
     pub score_at_entry: f64,
     pub liquidity_at_entry: f64,
-    /// Sudah eksekusi TP1 partial?
+    /// TP1 partial already executed?
     pub tp1_fired: bool,
-    /// Sudah eksekusi TP2 partial?
+    /// TP2 partial already executed?
     pub tp2_fired: bool,
 }
 
@@ -109,7 +109,7 @@ impl PaperPosition {
 }
 
 // ============================================================
-// PAPER TRADE HISTORY - Riwayat trade
+// PAPER TRADE HISTORY
 // ============================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,7 +181,7 @@ impl PaperTradingState {
         }
     }
 
-    /// Hitung total equity (balance + nilai posisi terbuka)
+    /// Calculate total equity (balance + value of open positions)
     pub fn total_equity(&self, current_prices: &HashMap<String, f64>) -> f64 {
         let open_pnl: f64 = self.positions.values()
             .map(|pos| {
@@ -192,14 +192,14 @@ impl PaperTradingState {
         self.current_balance_sol + open_pnl
     }
 
-    /// Return on Investment keseluruhan
+    /// Overall Return on Investment
     pub fn roi_percent(&self, current_prices: &HashMap<String, f64>) -> f64 {
         if self.initial_balance_sol == 0.0 { return 0.0; }
         (self.total_equity(current_prices) - self.initial_balance_sol)
             / self.initial_balance_sol * 100.0
     }
 
-    /// Win rate berdasarkan closed trades
+    /// Win rate based on closed trades
     pub fn win_rate(&self) -> f64 {
         let total = self.winning_trades + self.losing_trades;
         if total == 0 { return 0.0; }
@@ -214,62 +214,62 @@ impl PaperTradingState {
         self.total_profit_sol / self.total_loss_sol
     }
 
-    /// Hitung price impact menggunakan formula constant product AMM (xy=k)
-    /// Sama persis dengan model yang dipakai Jupiter untuk pool Solana
-    /// amount_sol: jumlah SOL yang diinvestasikan
-    /// liquidity_usd: total likuiditas pool dalam USD
-    /// sol_price_usd: harga SOL saat ini
+    /// Calculate price impact using constant product AMM formula (xy=k)
+    /// Same model used by Jupiter for Solana pools
+    /// amount_sol: SOL invested
+    /// liquidity_usd: total pool liquidity in USD
+    /// sol_price_usd: current SOL price
     pub fn calc_price_impact_pct(amount_sol: f64, liquidity_usd: f64, sol_price_usd: f64) -> f64 {
         if liquidity_usd <= 0.0 || sol_price_usd <= 0.0 {
             return 0.0;
         }
-        // SOL reserve di sisi pool ≈ setengah likuiditas total (asumsi 50/50 pool)
+        // SOL reserve on pool side ≈ half of total liquidity (assuming 50/50 pool)
         let sol_reserve = liquidity_usd / 2.0 / sol_price_usd;
-        // Formula AMM: impact = amount_in / (reserve_in + amount_in)
+        // AMM formula: impact = amount_in / (reserve_in + amount_in)
         let impact = amount_sol / (sol_reserve + amount_sol);
-        // Cap di 50% untuk menghindari angka tidak realistis
+        // Cap at 50% to avoid unrealistic values
         (impact * 100.0).min(50.0)
     }
 
-    /// Eksekusi paper buy — 100% simulasi kondisi mainnet
-    /// Termasuk: network fee, slippage, dan price impact dari pool AMM
+    /// Execute paper buy — 100% simulates mainnet conditions
+    /// Includes: network fee, slippage, and AMM pool price impact
     pub fn execute_buy(
         &mut self,
         token_address: String,
         symbol: String,
         name: String,
-        quoted_price_usd: f64,    // harga yang terlihat di DEX (sebelum slippage/impact)
+        quoted_price_usd: f64,    // price visible on DEX (before slippage/impact)
         amount_sol: f64,
-        slippage_percent: f64,    // slippage configured (dari DEFAULT_SLIPPAGE env)
-        sol_price_usd: f64,       // harga SOL saat ini
+        slippage_percent: f64,    // configured slippage (from DEFAULT_SLIPPAGE env)
+        sol_price_usd: f64,       // current SOL price
         score: f64,
         liquidity_usd: f64,
     ) -> Result<String, String> {
-        // Cek saldo cukup untuk amount + network fee
+        // Check balance covers amount + network fee
         let total_needed = amount_sol + NETWORK_FEE_SOL;
         if self.current_balance_sol < total_needed {
             return Err(format!(
-                "Saldo virtual tidak cukup: {:.6} SOL (butuh {:.6} SOL termasuk fee)",
+                "Insufficient virtual balance: {:.6} SOL (need {:.6} SOL including fee)",
                 self.current_balance_sol, total_needed
             ));
         }
 
         if self.positions.contains_key(&token_address) {
-            return Err(format!("Sudah punya posisi untuk {}", symbol));
+            return Err(format!("Already have a position for {}", symbol));
         }
 
-        // === SIMULASI MAINNET: Network fee ===
+        // === MAINNET SIMULATION: Network fee ===
         self.current_balance_sol -= NETWORK_FEE_SOL;
 
-        // === SIMULASI MAINNET: Price impact (constant product AMM) ===
+        // === MAINNET SIMULATION: Price impact (constant product AMM) ===
         let price_impact_pct = Self::calc_price_impact_pct(amount_sol, liquidity_usd, sol_price_usd);
 
-        // === SIMULASI MAINNET: Slippage pada beli (harga naik = lebih buruk untuk buyer) ===
+        // === MAINNET SIMULATION: Slippage on buy (price rises = worse for buyer) ===
         // Effective price = quoted * (1 + slippage%) * (1 + impact%)
         let total_cost_pct = slippage_percent + price_impact_pct;
         let effective_buy_price = quoted_price_usd * (1.0 + total_cost_pct / 100.0);
 
-        // === Token amount berdasarkan harga efektif (bukan harga quote) ===
+        // === Token amount based on effective price (not quoted price) ===
         let token_amount = if effective_buy_price > 0.0 {
             (amount_sol * sol_price_usd) / effective_buy_price
         } else {
@@ -281,7 +281,7 @@ impl PaperTradingState {
 
         println!(
             "[PAPER BUY] ✅ {} ({}) | {:.4} SOL @ quoted=${:.8} → effective=${:.8}\n\
-             [PAPER BUY]    Slippage: {:.2}% | Price Impact: {:.2}% | Fee: {:.6} SOL | Token: {:.2}",
+             [PAPER BUY]    Slippage: {:.2}% | Price Impact: {:.2}% | Fee: {:.6} SOL | Tokens: {:.2}",
             name, symbol, amount_sol,
             quoted_price_usd, effective_buy_price,
             slippage_percent, price_impact_pct,
@@ -311,12 +311,12 @@ impl PaperTradingState {
         Ok(format!("PAPER_{}_slip{:.1}_impact{:.2}", id, slippage_percent, price_impact_pct))
     }
 
-    /// Eksekusi paper sell — mendukung partial sell (3-stage TP) dan full close.
+    /// Execute paper sell — supports partial sell (3-stage TP) and full close.
     ///
-    /// - `percentage`: persen posisi yang dijual (1–100). 100 = close penuh.
+    /// - `percentage`: percentage of position to sell (1–100). 100 = full close.
     /// - `tp_stage`: 0 = full close, 1 = TP1 partial, 2 = TP2 partial.
-    ///   Partial sell mengurangi amount_sol/token_amount dan menandai tp1/tp2_fired,
-    ///   posisi tetap aktif. Full close menghapus posisi dari daftar aktif.
+    ///   Partial sell reduces amount_sol/token_amount and marks tp1/tp2_fired,
+    ///   position remains active. Full close removes position from active list.
     pub fn execute_sell(
         &mut self,
         token_address: &str,
@@ -328,11 +328,11 @@ impl PaperTradingState {
     ) -> Result<PaperTrade, String> {
         let is_partial = tp_stage > 0 && percentage < 100.0;
 
-        // Ambil snapshot fields yang dibutuhkan (tanpa memindahkan ownership dulu)
+        // Snapshot needed fields (without moving ownership yet)
         let (sym, name, buy_price, pos_amount_sol, pos_tokens,
              liquidity, score, entry_time, age_min) = {
             let pos = self.positions.get(token_address)
-                .ok_or_else(|| format!("Posisi tidak ditemukan: {}", token_address))?;
+                .ok_or_else(|| format!("Position not found: {}", token_address))?;
             (
                 pos.symbol.clone(), pos.name.clone(), pos.buy_price_usd,
                 pos.amount_sol, pos.token_amount,
@@ -341,11 +341,11 @@ impl PaperTradingState {
             )
         };
 
-        // Hitung berapa yang benar-benar dijual (persen dari posisi SAAT INI)
+        // Calculate how much is actually being sold (% of CURRENT position)
         let sold_sol    = pos_amount_sol * percentage / 100.0;
         let sold_tokens = pos_tokens     * percentage / 100.0;
 
-        // Price impact dari porsi yang dijual
+        // Price impact from the portion being sold
         let sell_value_usd = sold_tokens * quoted_sell_price;
         let sell_impact_pct = if liquidity > 0.0 {
             (sell_value_usd / liquidity * 50.0).min(30.0)
@@ -354,13 +354,13 @@ impl PaperTradingState {
         let total_cost_pct      = slippage_percent + sell_impact_pct;
         let effective_sell_price = quoted_sell_price * (1.0 - total_cost_pct / 100.0);
 
-        // Profit dihitung terhadap harga beli efektif
+        // Profit calculated against effective buy price
         let profit_pct = if buy_price > 0.0 {
             (effective_sell_price - buy_price) / buy_price * 100.0
         } else { 0.0 };
         let profit_sol = sold_sol * profit_pct / 100.0;
 
-        // Proceeds = (modal bagian yg dijual + profit) - network fee
+        // Proceeds = (capital of sold portion + profit) - network fee
         let gross_proceeds = sold_sol + profit_sol;
         let net_proceeds   = (gross_proceeds - NETWORK_FEE_SOL).max(0.0);
 
@@ -390,13 +390,13 @@ impl PaperTradingState {
 
         let stage_label = match tp_stage {
             1 => " [TP1 33%]",
-            2 => " [TP2 50%sisa]",
+            2 => " [TP2 50%rem]",
             _ => "",
         };
 
         println!(
             "[PAPER SELL] {} {} ({}) | {:.0}%{} | ${:.8} → ${:.8}\n\
-             [PAPER SELL]    Slip: {:.2}% | Impact: {:.2}% | P&L: {}{:.1}% ({}{:.5} SOL) | Saldo: {:.4} SOL",
+             [PAPER SELL]    Slip: {:.2}% | Impact: {:.2}% | P&L: {}{:.1}% ({}{:.5} SOL) | Balance: {:.4} SOL",
             if profit_pct >= 0.0 { "✅" } else { "❌" },
             name, sym, percentage, stage_label,
             quoted_sell_price, effective_sell_price,
@@ -425,7 +425,7 @@ impl PaperTradingState {
         self.closed_trades.push(trade.clone());
 
         if is_partial {
-            // Kurangi posisi — jangan hapus
+            // Reduce position — do not remove
             let remaining = 1.0 - percentage / 100.0;
             if let Some(pos) = self.positions.get_mut(token_address) {
                 pos.amount_sol   *= remaining;
@@ -437,14 +437,14 @@ impl PaperTradingState {
                 }
             }
         } else {
-            // Full close — hapus posisi
+            // Full close — remove position
             self.positions.remove(token_address);
         }
 
         Ok(trade)
     }
 
-    /// Update posisi: trailing stop dan harga tertinggi
+    /// Update positions: trailing stop and highest price
     pub fn update_positions(
         &mut self,
         prices: &HashMap<String, f64>,
@@ -465,24 +465,24 @@ impl PaperTradingState {
 
             let profit_pct = pos.profit_percent(current_price);
 
-            // Aktifkan trailing stop
+            // Activate trailing stop
             if profit_pct >= trailing_start && !pos.trailing_stop_active {
                 pos.trailing_stop_active = true;
                 pos.trailing_stop_price = current_price * (1.0 - trailing_distance / 100.0);
                 println!(
-                    "[PAPER TRAILING] {} - Trailing aktif di ${:.8} (profit: +{:.1}%)",
+                    "[PAPER TRAILING] {} - Trailing active at ${:.8} (profit: +{:.1}%)",
                     pos.symbol, pos.trailing_stop_price, profit_pct
                 );
             }
 
-            // Update trailing stop ke atas
+            // Ratchet trailing stop up
             if pos.trailing_stop_active {
                 let new_stop = current_price * (1.0 - trailing_distance / 100.0);
                 if new_stop > pos.trailing_stop_price {
                     pos.trailing_stop_price = new_stop;
                 }
 
-                // Cek apakah trailing stop kena
+                // Check if trailing stop is hit
                 if current_price <= pos.trailing_stop_price {
                     to_sell.push((addr.clone(), "Trailing Stop".to_string(), current_price));
                 }
@@ -492,10 +492,10 @@ impl PaperTradingState {
         to_sell
     }
 
-    /// Evaluasi semua posisi — mendukung 3-stage TP, SL, trailing stop, time exit.
+    /// Evaluate all positions — supports 3-stage TP, SL, trailing stop, time exit.
     ///
-    /// Return: `Vec<(addr, reason, price, sell_percent, tp_stage)>`
-    /// - `sell_percent`: berapa persen posisi yang harus dijual (1–100)
+    /// Returns: `Vec<(addr, reason, price, sell_percent, tp_stage)>`
+    /// - `sell_percent`: percentage of position to sell (1–100)
     /// - `tp_stage`: 0 = full close, 1 = TP1, 2 = TP2
     #[allow(clippy::too_many_arguments)]
     pub fn evaluate_positions(
@@ -527,7 +527,7 @@ impl PaperTradingState {
             let profit_pct  = pos.profit_percent(current_price);
             let age_minutes = pos.age_minutes();
 
-            // 1. STOP LOSS — potong rugi, jual SEMUA
+            // 1. STOP LOSS — cut loss, sell ALL
             if profit_pct <= -stop_loss {
                 to_sell.push((
                     addr.clone(),
@@ -537,10 +537,10 @@ impl PaperTradingState {
                 continue;
             }
 
-            // 2. TP1 PARTIAL — jual tp1_sell_pct% jika belum fire
+            // 2. TP1 PARTIAL — sell tp1_sell_pct% if not yet fired
             if tp1_pct > 0.0 && !pos.tp1_fired && profit_pct >= tp1_pct {
                 println!(
-                    "[PAPER TP1] 🎯 {} - profit +{:.1}% >= +{:.1}% | Jual {:.0}%",
+                    "[PAPER TP1] 🎯 {} - profit +{:.1}% >= +{:.1}% | Sell {:.0}%",
                     pos.symbol, profit_pct, tp1_pct, tp1_sell_pct
                 );
                 to_sell.push((
@@ -551,10 +551,10 @@ impl PaperTradingState {
                 continue;
             }
 
-            // 3. TP2 PARTIAL — jual tp2_sell_pct% dari sisa jika TP1 sudah fire
+            // 3. TP2 PARTIAL — sell tp2_sell_pct% of remainder if TP1 already fired
             if tp2_pct > 0.0 && pos.tp1_fired && !pos.tp2_fired && profit_pct >= tp2_pct {
                 println!(
-                    "[PAPER TP2] 🎯 {} - profit +{:.1}% >= +{:.1}% | Jual {:.0}% sisa",
+                    "[PAPER TP2] 🎯 {} - profit +{:.1}% >= +{:.1}% | Sell {:.0}% of remainder",
                     pos.symbol, profit_pct, tp2_pct, tp2_sell_pct
                 );
                 to_sell.push((
@@ -565,13 +565,13 @@ impl PaperTradingState {
                 continue;
             }
 
-            // 4. TRAILING STOP — lindungi sisa posisi
+            // 4. TRAILING STOP — protect remaining position
             if profit_pct >= trailing_start {
                 if !pos.trailing_stop_active {
                     pos.trailing_stop_active = true;
                     pos.trailing_stop_price  = current_price * (1.0 - trailing_distance / 100.0);
                     println!(
-                        "[PAPER TRAILING] {} - Aktif di ${:.8} | Profit: +{:.1}%",
+                        "[PAPER TRAILING] {} - Active at ${:.8} | Profit: +{:.1}%",
                         pos.symbol, pos.trailing_stop_price, profit_pct
                     );
                 } else {
@@ -590,28 +590,27 @@ impl PaperTradingState {
                 }
             }
 
-            // 5. TP FINAL — jual semua sisa
-            // Syarat: jika 3-stage aktif → harus sudah TP2; jika single TP → langsung
-            let tp_final_eligible = if tp1_pct > 0.0 { pos.tp2_fired } else { true };
-            if tp_final_eligible && profit_pct >= take_profit {
+            // 5. FINAL TP — sell all remaining
+            let tp3_eligible = if tp1_pct > 0.0 { pos.tp2_fired } else { true };
+            if tp3_eligible && profit_pct >= take_profit {
                 to_sell.push((
                     addr.clone(),
-                    format!("Take Profit Final +{:.1}%", profit_pct),
+                    format!("Final TP +{:.1}%", profit_pct),
                     current_price, 100.0, 0,
                 ));
                 continue;
             }
 
-            // 6. TIME EXIT — posisi stuck
-            if max_hold_minutes > 0
-                && age_minutes >= max_hold_minutes as i64
-                && profit_pct < time_exit_threshold
-            {
-                to_sell.push((
-                    addr.clone(),
-                    format!("Time Exit {} menit | P&L: {:.1}%", age_minutes, profit_pct),
-                    current_price, 100.0, 0,
-                ));
+            // 6. TIME EXIT — free up idle capital
+            if max_hold_minutes > 0 && age_minutes >= max_hold_minutes as i64 {
+                if profit_pct < time_exit_threshold {
+                    to_sell.push((
+                        addr.clone(),
+                        format!("Time Exit {} min | P&L: {:.1}%", age_minutes, profit_pct),
+                        current_price, 100.0, 0,
+                    ));
+                    continue;
+                }
             }
         }
 
@@ -620,7 +619,43 @@ impl PaperTradingState {
 }
 
 // ============================================================
-// FORMATTING & REPORTING
+// PERSISTENCE
+// ============================================================
+
+pub fn save_paper_state(state: &PaperTradingState) -> Result<(), Box<dyn std::error::Error>> {
+    let json = serde_json::to_string_pretty(state)?;
+    std::fs::write("paper_state.json", json)?;
+    Ok(())
+}
+
+pub fn load_paper_state(initial_balance: f64) -> PaperTradingState {
+    match std::fs::read_to_string("paper_state.json") {
+        Ok(content) => {
+            match serde_json::from_str::<PaperTradingState>(&content) {
+                Ok(state) => {
+                    println!(
+                        "[PAPER] State loaded: {:.4} SOL balance | {} open positions | {} closed trades",
+                        state.current_balance_sol,
+                        state.positions.len(),
+                        state.closed_trades.len()
+                    );
+                    state
+                }
+                Err(e) => {
+                    println!("[PAPER] Failed to parse saved state: {} — starting fresh", e);
+                    PaperTradingState::new(initial_balance)
+                }
+            }
+        }
+        Err(_) => {
+            println!("[PAPER] No saved state found, starting fresh simulation");
+            PaperTradingState::new(initial_balance)
+        }
+    }
+}
+
+// ============================================================
+// TELEGRAM NOTIFICATION FORMATTING
 // ============================================================
 
 pub fn format_paper_buy_notification(
@@ -628,118 +663,101 @@ pub fn format_paper_buy_notification(
     name: &str,
     token_address: &str,
     amount_sol: f64,
-    quoted_price_usd: f64,
-    effective_price_usd: f64,
-    slippage_pct: f64,
-    price_impact_pct: f64,
+    quoted_price: f64,
+    effective_price: f64,
+    slippage: f64,
+    price_impact: f64,
     score: f64,
     balance_after: f64,
-    total_positions: usize,
+    open_positions: usize,
 ) -> String {
-    let total_cost_pct = slippage_pct + price_impact_pct;
     format!(
-        "📋 **PAPER TRADING - SIMULASI BUY**\n\
+        "📝 **PAPER BUY** 📝\n\
         ═══════════════════════════════\n\n\
         💎 Token: **{}** `({})`\n\
         📍 `{}`\n\n\
-        💰 Modal Simulasi: **{:.4} SOL** (virtual)\n\
-        💵 Harga Quote: **${:.8}**\n\
-        💵 Harga Efektif: **${:.8}** _(setelah biaya)_\n\
-        📉 Biaya Transaksi: **{:.2}%** (slip {:.1}% + impact {:.1}%)\n\
-        🔧 Network Fee: **{:.6} SOL**\n\
-        ⭐ Skor Analisis: **{:.1}/100**\n\
-        📊 Posisi Aktif: **{}/max**\n\
-        💼 Saldo Virtual Tersisa: **{:.4} SOL**\n\n\
-        🔬 _Simulasi 100% akurat — slippage & price impact mainnet diterapkan_",
+        💰 Capital: **{:.4} SOL**\n\
+        💵 Quoted Price: **${:.8}**\n\
+        💵 Effective Price: **${:.8}**\n\
+        📊 Slippage: **{:.2}%** | Impact: **{:.2}%**\n\
+        ⭐ Score: **{:.1}/100**\n\n\
+        💼 Balance After: **{:.4} SOL**\n\
+        📊 Open Positions: **{}**\n\n\
+        ═══════════════════════════════\n\
+        🔬 _Paper trading — no real money_",
         name, symbol, token_address,
         amount_sol,
-        quoted_price_usd, effective_price_usd,
-        total_cost_pct, slippage_pct, price_impact_pct,
-        NETWORK_FEE_SOL,
+        quoted_price, effective_price,
+        slippage, price_impact,
         score,
-        total_positions, balance_after
+        balance_after, open_positions,
     )
 }
 
 pub fn format_paper_sell_notification(trade: &PaperTrade, balance_after: f64) -> String {
-    let (emoji, result_text) = if trade.profit_percent >= 0.0 {
-        ("✅", "PROFIT")
-    } else {
-        ("❌", "LOSS")
+    let emoji = match trade.result {
+        TradeResult::Profit   => "✅",
+        TradeResult::Loss     => "❌",
+        TradeResult::BreakEven => "➖",
     };
 
     format!(
-        "📋 **PAPER TRADING - SIMULASI SELL**\n\
+        "📝 **PAPER SELL** {}\n\
         ═══════════════════════════════\n\n\
-        {} Hasil: **{}**\n\n\
-        💎 Token: **{}** `({})`\n\
-        📍 `{}`\n\n\
-        {} P&L: **{}{:.1}%** ({}{:.4} SOL)\n\
-        💰 Beli Efektif: **${:.8}**\n\
-        💰 Jual Efektif: **${:.8}** _(setelah slip + impact)_\n\
-        📊 Modal: **{:.4} SOL**\n\
-        🔧 Fee Jual: **{:.6} SOL**\n\
-        ⏰ Durasi: **{} menit**\n\
-        🔄 Alasan Keluar: **{}**\n\
-        💼 Saldo Virtual: **{:.4} SOL**\n\n\
-        🔬 _Simulasi 100% akurat — slippage, impact & fee mainnet diterapkan_",
-        emoji, result_text,
+        💎 Token: **{}** `({})`\n\n\
+        {} P&L: **{}{:.1}%** ({}{:.5} SOL)\n\
+        💰 Entry: **${:.8}**\n\
+        💰 Exit: **${:.8}**\n\
+        ⏰ Duration: **{} minutes**\n\n\
+        🔄 Reason: **{}**\n\
+        ⭐ Score at Entry: **{:.1}/100**\n\n\
+        💼 Balance After: **{:.4} SOL**\n\
+        ═══════════════════════════════\n\
+        🔬 _Paper trading — no real money_",
+        emoji,
         trade.name, trade.symbol,
-        trade.token_address,
         emoji,
         if trade.profit_percent >= 0.0 { "+" } else { "" }, trade.profit_percent,
         if trade.profit_sol >= 0.0 { "+" } else { "" }, trade.profit_sol,
-        trade.buy_price,
-        trade.sell_price,
-        trade.amount_sol,
-        NETWORK_FEE_SOL,
+        trade.buy_price, trade.sell_price,
         trade.hold_duration_minutes,
         trade.exit_reason,
-        balance_after
+        trade.score_at_entry,
+        balance_after,
     )
 }
 
-pub fn format_paper_report(state: &PaperTradingState, current_prices: &HashMap<String, f64>) -> String {
+pub fn format_paper_report(
+    state: &PaperTradingState,
+    current_prices: &HashMap<String, f64>,
+) -> String {
     let equity = state.total_equity(current_prices);
     let roi = state.roi_percent(current_prices);
     let win_rate = state.win_rate();
-    let profit_factor = state.profit_factor();
-    let running_hours = Utc::now()
+    let pf = state.profit_factor();
+    let runtime_hours = Utc::now()
         .signed_duration_since(state.start_time)
         .num_hours();
 
-    // Rangking 5 trade terbaik
-    let mut sorted_trades = state.closed_trades.clone();
-    sorted_trades.sort_by(|a, b| b.profit_percent.partial_cmp(&a.profit_percent).unwrap());
+    let open_pnl: f64 = state.positions.values()
+        .map(|pos| {
+            let price = current_prices.get(&pos.token_address).copied().unwrap_or(pos.buy_price_usd);
+            pos.profit_sol(price)
+        })
+        .sum();
 
-    let top_trades: String = sorted_trades.iter().take(5)
-        .enumerate()
-        .map(|(i, t)| format!(
-            "{}. {} ({}) → {}{:.1}% | {} | {}",
-            i + 1,
-            t.symbol, t.name,
-            if t.profit_percent >= 0.0 { "+" } else { "" },
-            t.profit_percent,
-            if t.profit_percent >= 0.0 { "✅" } else { "❌" },
-            t.exit_reason
-        ))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Status posisi terbuka
-    let open_positions: String = if state.positions.is_empty() {
-        "Tidak ada posisi terbuka".to_string()
+    let positions_str = if state.positions.is_empty() {
+        "No open positions".to_string()
     } else {
         state.positions.values()
             .map(|pos| {
-                let curr = current_prices.get(&pos.token_address).copied().unwrap_or(pos.buy_price_usd);
-                let pct = pos.profit_percent(curr);
+                let price = current_prices.get(&pos.token_address).copied().unwrap_or(pos.buy_price_usd);
                 format!(
-                    "• {} | {}{:.1}% | {:.4} SOL | {} menit",
+                    "  • {} | P&L: {}{:.1}% | {:.4} SOL",
                     pos.symbol,
-                    if pct >= 0.0 { "+" } else { "" }, pct,
+                    if pos.profit_percent(price) >= 0.0 { "+" } else { "" },
+                    pos.profit_percent(price),
                     pos.amount_sol,
-                    pos.age_minutes()
                 )
             })
             .collect::<Vec<_>>()
@@ -748,78 +766,41 @@ pub fn format_paper_report(state: &PaperTradingState, current_prices: &HashMap<S
 
     format!(
         "📊 **PAPER TRADING REPORT**\n\
-        ═══════════════════════════════\n\
-        ⏰ Durasi Running: **{} jam**\n\n\
-        💰 **Performa Keseluruhan:**\n\
-        🏦 Modal Awal: **{:.4} SOL**\n\
-        💼 Equity Saat Ini: **{:.4} SOL**\n\
-        {} ROI: **{}{:.1}%**\n\n\
-        📈 **Statistik Trading:**\n\
-        🔢 Total Trade: **{}** (Buy: {} | Sell: {})\n\
-        ✅ Winning: **{}** | ❌ Losing: **{}**\n\
-        🎯 Win Rate: **{:.1}%**\n\
-        ⚖️ Profit Factor: **{:.2}**\n\
-        💚 Total Profit: **+{:.4} SOL**\n\
-        ❤️ Total Loss: **-{:.4} SOL**\n\
-        🏆 Trade Terbaik: **{}** (+{:.1}%)\n\
-        💀 Trade Terburuk: **{}** ({:.1}%)\n\n\
-        📋 **Posisi Terbuka ({}):**\n\
+        ═══════════════════════════════\n\n\
+        ⏱️ Runtime: **{} hours**\n\n\
+        💼 **Portfolio:**\n\
+        💰 Initial Balance: **{:.4} SOL**\n\
+        💰 Current Balance: **{:.4} SOL**\n\
+        📈 Open P&L: **{}{:.5} SOL**\n\
+        💎 Total Equity: **{:.4} SOL**\n\
+        📊 ROI: **{}{:.2}%**\n\n\
+        🏆 **Performance:**\n\
+        📈 Win Rate: **{:.1}%**\n\
+        💰 Profit Factor: **{:.2}**\n\
+        📊 Total Trades: **{}** (W: {} | L: {})\n\
+        💚 Total Profit: **+{:.5} SOL**\n\
+        ❤️ Total Loss: **-{:.5} SOL**\n\
+        🥇 Best Trade: **+{:.1}%** ({})\n\
+        💔 Worst Trade: **{:.1}%** ({})\n\n\
+        📋 **Open Positions ({}):**\n\
         {}\n\n\
-        🏅 **Top 5 Trade:**\n\
-        {}\n\n\
         ═══════════════════════════════\n\
-        ⚠️ _Simulasi Paper Trading - Bukan uang nyata_",
-        running_hours,
+        🔬 _Paper trading — no real money_",
+        runtime_hours,
         state.initial_balance_sol,
+        state.current_balance_sol,
+        if open_pnl >= 0.0 { "+" } else { "" }, open_pnl,
         equity,
-        if roi >= 0.0 { "📈" } else { "📉" },
         if roi >= 0.0 { "+" } else { "" }, roi,
-        state.total_buys.max(state.total_sells), state.total_buys, state.total_sells,
-        state.winning_trades, state.losing_trades,
         win_rate,
-        profit_factor,
+        pf,
+        state.winning_trades + state.losing_trades,
+        state.winning_trades, state.losing_trades,
         state.total_profit_sol,
         state.total_loss_sol,
-        if state.best_trade_symbol.is_empty() { "-".to_string() } else { state.best_trade_symbol.clone() },
-        state.best_trade_pct,
-        if state.worst_trade_symbol.is_empty() { "-".to_string() } else { state.worst_trade_symbol.clone() },
-        state.worst_trade_pct,
+        state.best_trade_pct, state.best_trade_symbol,
+        state.worst_trade_pct, state.worst_trade_symbol,
         state.positions.len(),
-        open_positions,
-        if top_trades.is_empty() { "Belum ada trade selesai".to_string() } else { top_trades },
+        positions_str,
     )
-}
-
-pub fn save_paper_state(state: &PaperTradingState) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(state)
-        .map_err(|e| format!("Gagal serialize paper state: {}", e))?;
-    std::fs::write("paper_trading.json", json)
-        .map_err(|e| format!("Gagal save paper state: {}", e))?;
-    Ok(())
-}
-
-pub fn load_paper_state(initial_balance: f64) -> PaperTradingState {
-    match std::fs::read_to_string("paper_trading.json") {
-        Ok(content) => {
-            match serde_json::from_str::<PaperTradingState>(&content) {
-                Ok(state) => {
-                    println!(
-                        "[PAPER] State dimuat - Equity: {:.4} SOL | {} trade closed | {} posisi terbuka",
-                        state.current_balance_sol,
-                        state.closed_trades.len(),
-                        state.positions.len()
-                    );
-                    state
-                }
-                Err(e) => {
-                    println!("[PAPER] Gagal load state ({}), mulai baru", e);
-                    PaperTradingState::new(initial_balance)
-                }
-            }
-        }
-        Err(_) => {
-            println!("[PAPER] Tidak ada state tersimpan, mulai simulasi baru");
-            PaperTradingState::new(initial_balance)
-        }
-    }
 }

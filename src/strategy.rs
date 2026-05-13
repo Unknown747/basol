@@ -1,69 +1,69 @@
 // ============================================================
-// AUTO BUY STRATEGY - Strategi pembelian otomatis
+// AUTO BUY STRATEGY - Automated buy strategy
 // ============================================================
 
 use crate::positions::Position;
 
 // ============================================================
-// KONSTANTA BIAYA TRANSAKSI
+// TRANSACTION FEE CONSTANTS
 // ============================================================
 
-/// Biaya jaringan Solana per transaksi (buy atau sell)
-/// Base fee 5000 lamport + priority fee ~20000 lamport = 25000 lamport = 0.000025 SOL
+/// Solana network fee per transaction (buy or sell)
+/// Base fee 5000 lamports + priority fee ~20000 lamports = 25000 lamports = 0.000025 SOL
 pub const NETWORK_FEE_SOL: f64 = 0.000025;
 
-/// Estimasi price impact default untuk pool kecil ($5k liquidity).
-/// Formula AMM: impact = trade_usd / (pool_usd + trade_usd)
-/// Untuk trade 0.05 SOL ≈ $8.5 di pool $5k: 8.5/5008.5 ≈ 0.17%
+/// Default price impact estimate for small pools ($5k liquidity).
+/// AMM formula: impact = trade_usd / (pool_usd + trade_usd)
+/// For a 0.05 SOL trade (~$8.5) in a $5k pool: 8.5/5008.5 ≈ 0.17%
 pub const DEFAULT_PRICE_IMPACT_PCT: f64 = 0.17;
 
 // ============================================================
-// ANALISIS BIAYA PER TRADE
+// PER-TRADE FEE ANALYSIS
 // ============================================================
 
-/// Hasil kalkulasi biaya lengkap untuk satu round trip trade.
+/// Full cost breakdown for a single round-trip trade.
 ///
-/// Berguna untuk menampilkan ke user berapa biaya sesungguhnya,
-/// bukan hanya angka TP/SL yang terlihat di layar.
+/// Useful for showing the user actual costs,
+/// not just the TP/SL numbers visible on screen.
 #[derive(Debug, Clone)]
 pub struct FeeAnalysis {
-    /// Biaya masuk: slippage + price impact + network fee (dalam SOL)
+    /// Entry cost: slippage + price impact + network fee (in SOL)
     pub entry_cost_sol: f64,
-    /// Biaya masuk dalam persen dari ukuran posisi
+    /// Entry cost as a percentage of position size
     pub entry_cost_pct: f64,
-    /// Biaya keluar di harga TP (dalam SOL)
+    /// Exit cost at TP price (in SOL)
     pub exit_cost_at_tp_sol: f64,
-    /// Biaya keluar dalam persen dari nilai jual
+    /// Exit cost as a percentage of sell value
     pub exit_cost_at_tp_pct: f64,
-    /// Biaya keluar di harga SL (dalam SOL)
+    /// Exit cost at SL price (in SOL)
     pub exit_cost_at_sl_sol: f64,
-    /// Total biaya round trip (masuk + keluar di TP)
+    /// Total round-trip cost (entry + exit at TP)
     pub total_roundtrip_cost_sol: f64,
-    /// Kenaikan harga minimum agar balik modal (cover semua biaya)
+    /// Minimum price gain needed to break even (cover all fees)
     pub breakeven_pct: f64,
-    /// Profit bersih (setelah biaya) jika TP tercapai
+    /// Net profit (after fees) if TP is reached
     pub net_profit_at_tp_sol: f64,
-    /// Profit bersih dalam persen dari posisi
+    /// Net profit as a percentage of position
     pub net_profit_at_tp_pct: f64,
-    /// Loss bersih (setelah biaya) jika SL tercapai
+    /// Net loss (after fees) if SL is hit
     pub net_loss_at_sl_sol: f64,
-    /// Loss bersih dalam persen dari posisi
+    /// Net loss as a percentage of position
     pub net_loss_at_sl_pct: f64,
     /// Risk/Reward ratio: net_profit_at_tp / net_loss_at_sl
     pub risk_reward_ratio: f64,
-    /// Win rate minimum agar EV positif
+    /// Minimum win rate needed for positive EV
     pub min_win_rate_pct: f64,
 }
 
-/// Hitung analisis biaya lengkap untuk satu rencana trade.
+/// Calculate full fee analysis for a single trade plan.
 ///
-/// **Parameter:**
-/// - `amount_sol`: ukuran posisi dalam SOL
-/// - `slippage_pct`: slippage yang dikonfigurasi (mis. 1.5)
-/// - `take_profit_pct`: target TP (mis. 20.0)
-/// - `stop_loss_pct`: batas SL (mis. 8.0)
-/// - `liquidity_usd`: likuiditas pool dalam USD
-/// - `sol_price_usd`: harga SOL saat ini dalam USD
+/// **Parameters:**
+/// - `amount_sol`: position size in SOL
+/// - `slippage_pct`: configured slippage (e.g. 1.5)
+/// - `take_profit_pct`: TP target (e.g. 20.0)
+/// - `stop_loss_pct`: SL level (e.g. 8.0)
+/// - `liquidity_usd`: pool liquidity in USD
+/// - `sol_price_usd`: current SOL price in USD
 pub fn compute_fee_analysis(
     amount_sol: f64,
     slippage_pct: f64,
@@ -74,8 +74,8 @@ pub fn compute_fee_analysis(
 ) -> FeeAnalysis {
     let position_usd = amount_sol * sol_price_usd;
 
-    // --- Biaya masuk ---
-    // Price impact berdasarkan ukuran trade vs likuiditas pool (formula AMM)
+    // --- Entry cost ---
+    // Price impact based on trade size vs pool liquidity (AMM formula)
     let entry_impact_pct = if liquidity_usd > 0.0 {
         (position_usd / (liquidity_usd + position_usd)) * 100.0
     } else {
@@ -86,7 +86,7 @@ pub fn compute_fee_analysis(
     let entry_cost_sol      = entry_slippage_sol + entry_impact_sol + NETWORK_FEE_SOL;
     let entry_cost_pct      = entry_cost_sol / amount_sol * 100.0;
 
-    // --- Biaya keluar di TP ---
+    // --- Exit cost at TP ---
     let tp_value_sol        = amount_sol * (1.0 + take_profit_pct / 100.0);
     let tp_value_usd        = tp_value_sol * sol_price_usd;
     let exit_impact_at_tp   = (tp_value_usd / (liquidity_usd + tp_value_usd)) * 100.0;
@@ -95,7 +95,7 @@ pub fn compute_fee_analysis(
     let exit_cost_at_tp_sol = exit_slip_at_tp_sol + exit_imp_at_tp_sol + NETWORK_FEE_SOL;
     let exit_cost_at_tp_pct = exit_cost_at_tp_sol / tp_value_sol * 100.0;
 
-    // --- Biaya keluar di SL ---
+    // --- Exit cost at SL ---
     let sl_value_sol        = amount_sol * (1.0 - stop_loss_pct / 100.0);
     let sl_value_usd        = sl_value_sol * sol_price_usd;
     let exit_impact_at_sl   = (sl_value_usd / (liquidity_usd + sl_value_usd)) * 100.0;
@@ -103,21 +103,20 @@ pub fn compute_fee_analysis(
     let exit_imp_at_sl_sol  = sl_value_sol * exit_impact_at_sl / 100.0;
     let exit_cost_at_sl_sol = exit_slip_at_sl_sol + exit_imp_at_sl_sol + NETWORK_FEE_SOL;
 
-    // --- Round trip total ---
+    // --- Total round trip ---
     let total_roundtrip_cost_sol = entry_cost_sol + exit_cost_at_tp_sol;
 
-    // Breakeven = berapa persen token harus naik agar menutup semua biaya
-    // (entry cost + exit cost di harga entry) / amount_sol × 100
-    // Estimasi konservatif: pakai total_roundtrip / amount_sol
+    // Breakeven = how much the token must rise to cover all fees
+    // Conservative estimate: total_roundtrip / amount_sol
     let breakeven_pct = total_roundtrip_cost_sol / amount_sol * 100.0;
 
-    // --- Net profit di TP ---
+    // --- Net profit at TP ---
     let gross_profit_at_tp  = amount_sol * take_profit_pct / 100.0;
     let net_profit_at_tp_sol = gross_profit_at_tp - total_roundtrip_cost_sol;
     let net_profit_at_tp_pct = net_profit_at_tp_sol / amount_sol * 100.0;
 
-    // --- Net loss di SL ---
-    // Total loss = SL% dari posisi + biaya masuk (sudah dibayar) + biaya keluar di SL
+    // --- Net loss at SL ---
+    // Total loss = SL% of position + entry cost (already paid) + exit cost at SL
     let gross_loss_at_sl    = amount_sol * stop_loss_pct / 100.0;
     let net_loss_at_sl_sol  = gross_loss_at_sl + entry_cost_sol + exit_cost_at_sl_sol;
     let net_loss_at_sl_pct  = net_loss_at_sl_sol / amount_sol * 100.0;
@@ -129,7 +128,7 @@ pub fn compute_fee_analysis(
         0.0
     };
 
-    // --- Win rate minimum untuk EV positif ---
+    // --- Minimum win rate for positive EV ---
     // w × net_profit - (1-w) × net_loss > 0
     // w(net_profit + net_loss) > net_loss
     // w > net_loss / (net_profit + net_loss)
@@ -157,14 +156,14 @@ pub fn compute_fee_analysis(
 }
 
 // ============================================================
-// CONFIG TRADING
+// TRADING CONFIG
 // ============================================================
 
 #[derive(Debug, Clone)]
 pub struct TradingConfig {
     pub trading_enabled: bool,
     pub max_position_sol: f64,
-    /// Ukuran posisi minimum (default: 10% dari max, minimal 0.01 SOL)
+    /// Minimum position size (default: 10% of max, minimum 0.01 SOL)
     pub min_position_sol: f64,
     pub take_profit_percent: f64,
     pub stop_loss_percent: f64,
@@ -174,23 +173,23 @@ pub struct TradingConfig {
     pub min_liquidity_usd: f64,
     pub default_slippage: f64,
     pub max_positions: usize,
-    /// Jika > 0: keluar otomatis jika posisi stuck lebih dari X menit.
+    /// If > 0: auto-exit if position is stuck longer than X minutes.
     pub max_hold_minutes: u64,
-    /// Threshold P&L untuk time exit.
+    /// P&L threshold for time exit.
     pub time_exit_threshold_pct: f64,
 
     // === 3-STAGE TAKE PROFIT ===
-    /// Level TP tahap 1 — jual tp1_sell_percent% posisi di sini
-    /// Harus > break-even (~3.81% untuk 0.05 SOL dengan slippage 1.5%)
-    /// Set 0.0 untuk nonaktifkan 3-stage dan gunakan single TP saja
+    /// TP1 level — sell tp1_sell_percent% of position here
+    /// Must be > break-even (~3.81% for 0.05 SOL with 1.5% slippage)
+    /// Set 0.0 to disable 3-stage and use single TP only
     pub tp1_percent: f64,
-    /// Berapa persen posisi dijual di TP1 (contoh: 33.0 = sepertiga)
+    /// Percentage of position to sell at TP1 (e.g. 33.0 = one third)
     pub tp1_sell_percent: f64,
-    /// Level TP tahap 2 — jual tp2_sell_percent% dari sisa posisi
+    /// TP2 level — sell tp2_sell_percent% of remaining position
     pub tp2_percent: f64,
-    /// Berapa persen sisa posisi dijual di TP2 (contoh: 50.0 = setengah sisa)
+    /// Percentage of remaining position to sell at TP2 (e.g. 50.0 = half of remainder)
     pub tp2_sell_percent: f64,
-    // Sisa posisi (100 - tp1 - tp2*(100-tp1)/100) ditangani trailing stop atau TP final
+    // Remaining position (100 - tp1 - tp2*(100-tp1)/100) is managed by trailing stop or final TP
 }
 
 impl TradingConfig {
@@ -236,7 +235,7 @@ impl TradingConfig {
         let time_exit_threshold_pct = std::env::var("TIME_EXIT_THRESHOLD_PCT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
 
-        // 3-stage TP — default 0.0 = nonaktif (pakai single TP biasa)
+        // 3-stage TP — default 0.0 = disabled (use single TP)
         let tp1_percent = std::env::var("TP1_PERCENT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
         let tp1_sell_percent = std::env::var("TP1_SELL_PERCENT")
@@ -267,7 +266,7 @@ impl TradingConfig {
         }
     }
 
-    /// Config default aman (untuk testing tanpa .env) — 3-stage dinonaktifkan
+    /// Safe default config (for testing without .env) — 3-stage disabled
     pub fn default_safe() -> Self {
         Self {
             trading_enabled: false,
@@ -290,32 +289,32 @@ impl TradingConfig {
         }
     }
 
-    /// Preset scalping untuk modal kecil (0.05–0.2 SOL per trade).
+    /// Scalping preset for small capital (0.05–0.2 SOL per trade).
     ///
-    /// **3-Stage Take Profit (0.05 SOL, slippage 1.5%, pool $5k):**
+    /// **3-Stage Take Profit (0.05 SOL, 1.5% slippage, $5k pool):**
     ///
     /// ```
-    /// TP1 +12% → jual 33% → net +8.2% pada porsi itu (AMAN, sudah di atas break-even 3.81%)
-    /// TP2 +20% → jual 50% sisa → net +16.2% pada porsi itu
-    /// TP3 +35% → jual semua sisa → net +31.2% (bonus jika market hot)
-    ///    ATAU trailing stop 3% jaga sisa posisi
-    /// SL  -8%  → jual SEMUA 100% seketika → net -11.3%
+    /// TP1 +12% → sell 33% → net +8.2% on that portion (SAFE, above break-even 3.81%)
+    /// TP2 +20% → sell 50% of remainder → net +16.2% on that portion
+    /// TP3 +35% → sell all remaining → net +31.2% (bonus if market keeps running)
+    ///    OR trailing stop 3% protects remaining position
+    /// SL  -8%  → sell ALL 100% immediately → net -11.3%
     /// ```
     ///
-    /// **Distribusi 0.05 SOL:**
-    /// - TP1: jual 0.0167 SOL → dapat balik ~0.0180 SOL (+8.2%)
-    /// - TP2: jual 0.0167 SOL dari sisa → dapat balik ~0.0194 SOL (+16.2%)
-    /// - TP3: jual 0.0167 SOL terakhir → dapat balik ~0.0219 SOL (+31.2%)
+    /// **Distribution of 0.05 SOL:**
+    /// - TP1: sell 0.0167 SOL → receive back ~0.0180 SOL (+8.2%)
+    /// - TP2: sell 0.0167 SOL from remainder → receive back ~0.0194 SOL (+16.2%)
+    /// - TP3: sell last 0.0167 SOL → receive back ~0.0219 SOL (+31.2%)
     ///
-    /// **Setelah TP1 fire: tidak bisa rugi walau harga berbalik!**
+    /// **After TP1 fires: cannot lose even if price reverses!**
     pub fn scalping_preset() -> Self {
         Self {
             trading_enabled: false,
             max_position_sol: 0.05,
             min_position_sol: 0.05,
-            take_profit_percent: 35.0,   // TP3 / TP final jika market terus naik
+            take_profit_percent: 35.0,   // TP3 / final TP if market keeps climbing
             stop_loss_percent: 8.0,
-            trailing_start_percent: 12.0, // trailing aktif bersamaan dengan TP1
+            trailing_start_percent: 12.0, // trailing activates alongside TP1
             trailing_distance_percent: 3.0,
             min_score_to_buy: 87.0,
             min_liquidity_usd: 5_000.0,
@@ -323,11 +322,11 @@ impl TradingConfig {
             max_positions: 2,
             max_hold_minutes: 40,
             time_exit_threshold_pct: 3.0,
-            tp1_percent: 12.0,           // TP1 di +12%
-            tp1_sell_percent: 33.0,      // jual 33% posisi
-            tp2_percent: 20.0,           // TP2 di +20%
-            tp2_sell_percent: 50.0,      // jual 50% dari sisa (= 33% posisi awal)
-                                         // sisa 34% posisi awal dikelola trailing/TP3
+            tp1_percent: 12.0,           // TP1 at +12%
+            tp1_sell_percent: 33.0,      // sell 33% of position
+            tp2_percent: 20.0,           // TP2 at +20%
+            tp2_sell_percent: 50.0,      // sell 50% of remainder (= 33% of original)
+                                         // remaining 34% of original managed by trailing/TP3
         }
     }
 }
@@ -364,92 +363,92 @@ pub enum BuyDecision {
 }
 
 // ============================================================
-// FUNGSI STRATEGI BUY
+// BUY STRATEGY FUNCTIONS
 // ============================================================
 
-/// Evaluasi apakah token layak dibeli dan berapa ukuran posisinya.
+/// Evaluate whether a token should be bought and what position size to use.
 ///
-/// **Formula position sizing (score-based):**
-/// - Skor 87 → 48% dari max_position_sol
-/// - Skor 93 → 72% dari max_position_sol
-/// - Skor 100 → 100% dari max_position_sol
-/// - Hasil di-clamp ke [min_position_sol, max_position_sol]
+/// **Position sizing formula (score-based):**
+/// - Score 87 → 48% of max_position_sol
+/// - Score 93 → 72% of max_position_sol
+/// - Score 100 → 100% of max_position_sol
+/// - Result is clamped to [min_position_sol, max_position_sol]
 ///
-/// **Catatan untuk modal kecil:**
-/// Dengan min_position_sol=0.02 dan max=0.05, maka skor 87 → max(0.024, 0.02) = 0.024 SOL.
-/// Tapi dianjurkan set MIN_POSITION_SOL=0.05 agar konsisten 0.05 SOL per trade.
+/// **Note for small capital:**
+/// With min_position_sol=0.02 and max=0.05, score 87 → max(0.024, 0.02) = 0.024 SOL.
+/// Recommended to set MIN_POSITION_SOL=0.05 for a consistent 0.05 SOL per trade.
 pub fn evaluate_buy_signal(
     signal: &BuySignal,
     config: &TradingConfig,
     existing_positions: &std::collections::HashMap<String, Position>,
 ) -> BuyDecision {
-    // 1. Cek trading enabled
+    // 1. Check trading enabled
     if !config.trading_enabled {
         return BuyDecision::Skip {
-            reason: "Trading dinonaktifkan (TRADING_ENABLED=false)".to_string(),
+            reason: "Trading disabled (TRADING_ENABLED=false)".to_string(),
         };
     }
 
-    // 2. Cek skor minimum
+    // 2. Check minimum score
     if signal.total_score < config.min_score_to_buy {
         return BuyDecision::Skip {
             reason: format!(
-                "Skor {:.1} di bawah minimum {:.1}",
+                "Score {:.1} below minimum {:.1}",
                 signal.total_score, config.min_score_to_buy
             ),
         };
     }
 
-    // 3. Cek duplikasi posisi
+    // 3. Check for duplicate position
     if existing_positions.contains_key(&signal.token_address) {
         return BuyDecision::Skip {
-            reason: format!("Sudah punya posisi untuk {}", signal.symbol),
+            reason: format!("Already have a position for {}", signal.symbol),
         };
     }
 
-    // 4. Cek batas posisi aktif
+    // 4. Check max active positions
     if existing_positions.len() >= config.max_positions {
         return BuyDecision::Skip {
             reason: format!(
-                "Sudah {} posisi aktif (maks: {})",
+                "Already have {} active positions (max: {})",
                 existing_positions.len(), config.max_positions
             ),
         };
     }
 
-    // 5. Cek likuiditas minimum
+    // 5. Check minimum liquidity
     if signal.liquidity_usd < config.min_liquidity_usd {
         return BuyDecision::Skip {
             reason: format!(
-                "Likuiditas ${:.0} di bawah minimum ${:.0}",
+                "Liquidity ${:.0} below minimum ${:.0}",
                 signal.liquidity_usd, config.min_liquidity_usd
             ),
         };
     }
 
-    // 6. Cek mint authority revoked
+    // 6. Check mint authority revoked
     if !signal.mint_authority_revoked {
         return BuyDecision::Skip {
-            reason: "Mint authority belum direvoke — risiko rugpull tinggi".to_string(),
+            reason: "Mint authority not revoked — high rugpull risk".to_string(),
         };
     }
 
-    // 7. Hitung ukuran posisi berdasarkan skor
+    // 7. Calculate position size based on score
     //
     //   multiplier = (score - 75) / 25   → range [0.0, 1.0]
-    //   Skor 87  → 0.48 × max
-    //   Skor 93  → 0.72 × max
-    //   Skor 100 → 1.00 × max
-    //   Di-clamp ke [min_position_sol, max_position_sol]
+    //   Score 87  → 0.48 × max
+    //   Score 93  → 0.72 × max
+    //   Score 100 → 1.00 × max
+    //   Clamped to [min_position_sol, max_position_sol]
     let score_multiplier = ((signal.total_score - 75.0) / 25.0).clamp(0.0, 1.0);
     let raw_size = score_multiplier * config.max_position_sol;
     let position_size = raw_size
         .max(config.min_position_sol)
         .min(config.max_position_sol);
 
-    // 8. Hitung analisis biaya untuk posisi ini
-    // Gunakan sol_price default 170.0 jika tidak tersedia dari signal
-    let sol_price_estimate = 170.0_f64; // fallback; idealnya dari main bot state
+    // 8. Calculate fee analysis for this position
+    // Use default SOL price 170.0 if not available from signal
+    let sol_price_estimate = 170.0_f64; // fallback; ideally from main bot state
     let fee_analysis = compute_fee_analysis(
         position_size,
         config.default_slippage,
@@ -460,7 +459,7 @@ pub fn evaluate_buy_signal(
     );
 
     let reason = format!(
-        "Skor {:.1}/100 | Liq ${:.0} | {:.4} SOL | R:R {:.2} | Breakeven +{:.1}%",
+        "Score {:.1}/100 | Liq ${:.0} | {:.4} SOL | R:R {:.2} | Breakeven +{:.1}%",
         signal.total_score,
         signal.liquidity_usd,
         position_size,
@@ -475,41 +474,41 @@ pub fn evaluate_buy_signal(
     }
 }
 
-/// Log detail keputusan buy ke console, termasuk analisis biaya lengkap
+/// Log detailed buy decision to console, including full fee analysis
 pub fn log_buy_decision(signal: &BuySignal, decision: &BuyDecision) {
     let addr_short = &signal.token_address[..signal.token_address.len().min(8)];
     match decision {
         BuyDecision::Buy { amount_sol, reason, fee_analysis: fa } => {
             println!(
-                "[BUY EVAL] ✅ BELI {} ({}) | {}",
+                "[BUY EVAL] ✅ BUY {} ({}) | {}",
                 signal.symbol, addr_short, reason
             );
             println!(
-                "[BUY EVAL]    Biaya masuk  : {:.5} SOL ({:.2}%)",
+                "[BUY EVAL]    Entry cost  : {:.5} SOL ({:.2}%)",
                 fa.entry_cost_sol, fa.entry_cost_pct
             );
             println!(
-                "[BUY EVAL]    Biaya keluar : {:.5} SOL ({:.2}% dari nilai jual)",
+                "[BUY EVAL]    Exit cost   : {:.5} SOL ({:.2}% of sell value)",
                 fa.exit_cost_at_tp_sol, fa.exit_cost_at_tp_pct
             );
             println!(
-                "[BUY EVAL]    Break-even   : harga harus naik minimal +{:.2}%",
+                "[BUY EVAL]    Break-even  : price must rise at least +{:.2}%",
                 fa.breakeven_pct
             );
             println!(
-                "[BUY EVAL]    Net jika TP  : +{:.5} SOL (+{:.2}% bersih)",
+                "[BUY EVAL]    Net if TP   : +{:.5} SOL (+{:.2}% net)",
                 fa.net_profit_at_tp_sol, fa.net_profit_at_tp_pct
             );
             println!(
-                "[BUY EVAL]    Net jika SL  : -{:.5} SOL (-{:.2}% bersih)",
+                "[BUY EVAL]    Net if SL   : -{:.5} SOL (-{:.2}% net)",
                 fa.net_loss_at_sl_sol, fa.net_loss_at_sl_pct
             );
             println!(
-                "[BUY EVAL]    R:R ratio    : {:.2} | Win rate min: {:.1}%",
+                "[BUY EVAL]    R:R ratio   : {:.2} | Min win rate: {:.1}%",
                 fa.risk_reward_ratio, fa.min_win_rate_pct
             );
             println!(
-                "[BUY EVAL]    Ukuran posisi: {:.4} SOL | Total round trip cost: {:.5} SOL",
+                "[BUY EVAL]    Position    : {:.4} SOL | Total round-trip cost: {:.5} SOL",
                 amount_sol, fa.total_roundtrip_cost_sol
             );
         }

@@ -1,28 +1,28 @@
 // ============================================================
-// AUTO SELL STRATEGY - Take profit bertahap, stop loss, trailing, time exit
+// AUTO SELL STRATEGY - Staged take profit, stop loss, trailing, time exit
 // ============================================================
 
 use crate::positions::Position;
 use crate::strategy::TradingConfig;
 
 // ============================================================
-// SELL TRIGGER - Jenis pemicu jual
+// SELL TRIGGER - Types of sell triggers
 // ============================================================
 
 #[derive(Debug, Clone)]
 pub enum SellTrigger {
-    /// Partial take profit — jual sebagian posisi di level ini
+    /// Partial take profit — sell a portion of the position at this level
     PartialTakeProfit {
-        stage: u8,          // 1 atau 2
-        target_pct: f64,    // level TP yang dikonfigurasi
-        profit_pct: f64,    // profit aktual saat trigger
-        sell_pct: f64,      // berapa % posisi yang dijual
+        stage: u8,          // 1 or 2
+        target_pct: f64,    // configured TP level
+        profit_pct: f64,    // actual profit at trigger
+        sell_pct: f64,      // percentage of position to sell
     },
-    /// Take profit penuh — jual semua sisa posisi
+    /// Full take profit — sell all remaining position
     TakeProfit { profit_percent: f64 },
     StopLoss { loss_percent: f64 },
     TrailingStop { profit_percent: f64 },
-    /// Posisi stuck terlalu lama — keluar untuk bebaskan modal
+    /// Position stuck too long — exit to free up capital
     TimeExit { hold_minutes: i64, profit_percent: f64 },
     ManualSell,
 }
@@ -43,7 +43,7 @@ impl SellTrigger {
                 format!("TRAILING STOP (profit: +{:.1}%)", profit_percent),
             SellTrigger::TimeExit { hold_minutes, profit_percent } =>
                 format!(
-                    "TIME EXIT {} menit | P&L: {}{:.1}%",
+                    "TIME EXIT {} min | P&L: {}{:.1}%",
                     hold_minutes,
                     if *profit_percent >= 0.0 { "+" } else { "" },
                     profit_percent
@@ -63,7 +63,7 @@ impl SellTrigger {
         }
     }
 
-    /// Apakah ini partial sell (bukan close penuh)?
+    /// Is this a partial sell (not a full close)?
     pub fn is_partial(&self) -> bool {
         matches!(self, SellTrigger::PartialTakeProfit { .. })
     }
@@ -76,7 +76,7 @@ impl SellTrigger {
 #[derive(Debug)]
 pub enum SellDecision {
     Sell {
-        /// Persen dari posisi SAAT INI yang dijual (100.0 = semua)
+        /// Percentage of the CURRENT position to sell (100.0 = all)
         percentage: f64,
         trigger: SellTrigger,
     },
@@ -86,26 +86,26 @@ pub enum SellDecision {
 }
 
 // ============================================================
-// FUNGSI EVALUASI POSISI
+// POSITION EVALUATION FUNCTIONS
 // ============================================================
 
-/// Evaluasi satu posisi — apakah perlu dijual, berapa persen, dengan trigger apa.
+/// Evaluate a single position — whether to sell, how much, and with what trigger.
 ///
-/// **Urutan pengecekan:**
-/// 1. Stop Loss        — potong rugi sekarang, jual SEMUA (100%)
-/// 2. TP1 Partial      — jual tp1_sell_percent% di level tp1_percent
-/// 3. TP2 Partial      — jual tp2_sell_percent% di level tp2_percent (setelah TP1 fired)
-/// 4. Trailing Stop    — lindungi profit, jual sisa
-/// 5. TP Final         — jual semua sisa jika mencapai take_profit_percent
-/// 6. Time Exit        — posisi nganggur, keluar untuk bebaskan modal
-/// 7. Hold             — tidak ada trigger aktif
+/// **Check order:**
+/// 1. Stop Loss        — cut loss now, sell ALL (100%)
+/// 2. TP1 Partial      — sell tp1_sell_percent% at tp1_percent level
+/// 3. TP2 Partial      — sell tp2_sell_percent% at tp2_percent level (after TP1 fired)
+/// 4. Trailing Stop    — protect profit, sell remainder
+/// 5. Final TP         — sell all remaining if take_profit_percent reached
+/// 6. Time Exit        — idle position, exit to free up capital
+/// 7. Hold             — no active trigger
 ///
-/// **Catatan matematika:**
-/// Dengan modal 0.05 SOL dan biaya round-trip 3.81%:
-/// - TP1 di +12%: net +8.2% (AMAN, sudah di atas break-even)
-/// - TP2 di +20%: net +16.2% (bagus)
-/// - TP Final di +35%: net +31.2% (jika market sedang hot)
-/// - SL di -8%: net -11.3% (potong cepat, hemat modal)
+/// **Math notes:**
+/// With 0.05 SOL and 3.81% round-trip break-even:
+/// - TP1 at +12%: net +8.2% (SAFE, above break-even)
+/// - TP2 at +20%: net +16.2% (good)
+/// - Final TP at +35%: net +31.2% (if market is hot)
+/// - SL at -8%: net -11.3% (quick cut, preserves capital)
 pub fn evaluate_position(
     position: &mut Position,
     current_price: f64,
@@ -113,7 +113,7 @@ pub fn evaluate_position(
 ) -> SellDecision {
     if current_price <= 0.0 {
         return SellDecision::Hold {
-            reason: "Harga tidak tersedia".to_string(),
+            reason: "Price unavailable".to_string(),
         };
     }
 
@@ -123,12 +123,12 @@ pub fn evaluate_position(
     position.update_highest(current_price);
 
     // -------------------------------------------------------
-    // 1. STOP LOSS — selalu jual 100%, potong rugi segera
-    //    Jangan partial SL — kerugian bisa makin dalam!
+    // 1. STOP LOSS — always sell 100%, cut loss immediately
+    //    Never partial SL — losses can deepen!
     // -------------------------------------------------------
     if profit_pct <= -config.stop_loss_percent {
         println!(
-            "[SELL EVAL] 🛑 {} - Stop loss: {:.1}% (batas: -{:.1}%)",
+            "[SELL EVAL] 🛑 {} - Stop loss: {:.1}% (limit: -{:.1}%)",
             position.symbol, profit_pct, config.stop_loss_percent
         );
         return SellDecision::Sell {
@@ -138,16 +138,16 @@ pub fn evaluate_position(
     }
 
     // -------------------------------------------------------
-    // 2. TP1 — jual sebagian pertama
-    //    Kunci profit awal, pastikan tidak rugi fee.
-    //    TP1 harus > break-even (~3.81% untuk 0.05 SOL).
+    // 2. TP1 — sell first partial
+    //    Lock in initial profit, ensure fees are covered.
+    //    TP1 must be > break-even (~3.81% for 0.05 SOL).
     // -------------------------------------------------------
     if config.tp1_percent > 0.0
         && !position.tp1_fired
         && profit_pct >= config.tp1_percent
     {
         println!(
-            "[SELL EVAL] 🎯 {} - TP1: profit +{:.1}% >= +{:.1}% | Jual {:.0}% posisi",
+            "[SELL EVAL] 🎯 {} - TP1: profit +{:.1}% >= +{:.1}% | Sell {:.0}% of position",
             position.symbol, profit_pct, config.tp1_percent, config.tp1_sell_percent
         );
         return SellDecision::Sell {
@@ -162,8 +162,8 @@ pub fn evaluate_position(
     }
 
     // -------------------------------------------------------
-    // 3. TP2 — jual sebagian kedua (hanya jika TP1 sudah fire)
-    //    Lock in profit lebih besar, biarkan sisa riding.
+    // 3. TP2 — sell second partial (only after TP1 fired)
+    //    Lock in more profit, let remainder ride.
     // -------------------------------------------------------
     if config.tp2_percent > 0.0
         && position.tp1_fired
@@ -171,7 +171,7 @@ pub fn evaluate_position(
         && profit_pct >= config.tp2_percent
     {
         println!(
-            "[SELL EVAL] 🎯 {} - TP2: profit +{:.1}% >= +{:.1}% | Jual {:.0}% sisa posisi",
+            "[SELL EVAL] 🎯 {} - TP2: profit +{:.1}% >= +{:.1}% | Sell {:.0}% of remainder",
             position.symbol, profit_pct, config.tp2_percent, config.tp2_sell_percent
         );
         return SellDecision::Sell {
@@ -186,10 +186,10 @@ pub fn evaluate_position(
     }
 
     // -------------------------------------------------------
-    // 4. TRAILING STOP — aktif setelah profit >= trailing_start
-    //    Setelah TP1 atau TP2 fire, trailing melindungi sisa posisi.
-    //    Jika harga terus naik → stop ikut naik (ratchet up).
-    //    Jika harga balik turun → stop kena → jual semua sisa.
+    // 4. TRAILING STOP — active after profit >= trailing_start
+    //    After TP1 or TP2 fires, trailing protects remainder.
+    //    If price keeps rising → stop ratchets up.
+    //    If price reverses → stop hit → sell all remainder.
     // -------------------------------------------------------
     if profit_pct >= config.trailing_start_percent {
         if !position.trailing_stop_active {
@@ -211,19 +211,19 @@ pub fn evaluate_position(
     }
 
     // -------------------------------------------------------
-    // 5. TP FINAL — jual semua sisa jika harga terus naik kencang.
-    //    - Jika 3-stage aktif (tp1/tp2 dikonfigurasi): hanya fire setelah TP2
-    //    - Jika 3-stage nonaktif (tp1_percent=0): berlaku sebagai single TP
+    // 5. FINAL TP — sell all remaining if price keeps pumping.
+    //    - If 3-stage active (tp1/tp2 configured): only fires after TP2
+    //    - If 3-stage disabled (tp1_percent=0): acts as single TP
     // -------------------------------------------------------
     let tp3_eligible = if config.tp1_percent > 0.0 {
-        position.tp2_fired // 3-stage mode: harus sudah TP2
+        position.tp2_fired // 3-stage mode: must have already hit TP2
     } else {
         true // single TP mode
     };
 
     if tp3_eligible && profit_pct >= config.take_profit_percent {
         println!(
-            "[SELL EVAL] 💰 {} - TP Final: +{:.1}% (target: +{:.1}%)",
+            "[SELL EVAL] 💰 {} - Final TP: +{:.1}% (target: +{:.1}%)",
             position.symbol, profit_pct, config.take_profit_percent
         );
         return SellDecision::Sell {
@@ -233,12 +233,12 @@ pub fn evaluate_position(
     }
 
     // -------------------------------------------------------
-    // 6. TIME EXIT — bebaskan modal yang nganggur
+    // 6. TIME EXIT — free up idle capital
     // -------------------------------------------------------
     if config.max_hold_minutes > 0 && age_minutes >= config.max_hold_minutes as i64 {
         if profit_pct < config.time_exit_threshold_pct {
             println!(
-                "[SELL EVAL] ⏰ {} - Time exit: {} menit | P&L: {:.1}%",
+                "[SELL EVAL] ⏰ {} - Time exit: {} min | P&L: {:.1}%",
                 position.symbol, age_minutes, profit_pct
             );
             return SellDecision::Sell {
@@ -253,8 +253,8 @@ pub fn evaluate_position(
     // -------------------------------------------------------
     let tp_status = if config.tp1_percent > 0.0 {
         match (position.tp1_fired, position.tp2_fired) {
-            (false, _)    => format!("TP1 menunggu +{:.0}%", config.tp1_percent),
-            (true, false) => format!("TP1✅ TP2 menunggu +{:.0}%", config.tp2_percent),
+            (false, _)    => format!("TP1 waiting +{:.0}%", config.tp1_percent),
+            (true, false) => format!("TP1✅ TP2 waiting +{:.0}%", config.tp2_percent),
             (true, true)  => format!("TP1✅ TP2✅ Final +{:.0}%", config.take_profit_percent),
         }
     } else {
@@ -262,9 +262,9 @@ pub fn evaluate_position(
     };
 
     let time_info = if config.max_hold_minutes > 0 {
-        format!(" | Waktu: {}/{} mnt", age_minutes, config.max_hold_minutes)
+        format!(" | Time: {}/{} min", age_minutes, config.max_hold_minutes)
     } else {
-        format!(" | Waktu: {} mnt", age_minutes)
+        format!(" | Time: {} min", age_minutes)
     };
 
     SellDecision::Hold {
@@ -274,16 +274,16 @@ pub fn evaluate_position(
             tp_status,
             config.stop_loss_percent,
             if position.trailing_stop_active {
-                format!("aktif @ ${:.8}", position.trailing_stop_price)
+                format!("active @ ${:.8}", position.trailing_stop_price)
             } else {
-                format!("aktif mulai +{:.0}%", config.trailing_start_percent)
+                format!("activates at +{:.0}%", config.trailing_start_percent)
             },
             time_info,
         ),
     }
 }
 
-/// Evaluasi semua posisi aktif — kembalikan daftar yang perlu dijual
+/// Evaluate all active positions — return list of those that need selling
 pub fn evaluate_all_positions(
     positions: &mut std::collections::HashMap<String, Position>,
     prices: &std::collections::HashMap<String, f64>,
@@ -297,7 +297,7 @@ pub fn evaluate_all_positions(
             match &decision {
                 SellDecision::Sell { trigger, percentage } => {
                     println!(
-                        "[SELL EVAL] {} {} {} ({:.0}%) | Masuk: ${:.8} | Sekarang: ${:.8}",
+                        "[SELL EVAL] {} {} {} ({:.0}%) | Entry: ${:.8} | Now: ${:.8}",
                         trigger.emoji(),
                         position.symbol,
                         trigger.description(),
@@ -312,7 +312,7 @@ pub fn evaluate_all_positions(
                 }
             }
         } else {
-            println!("[SELL EVAL] ⚠️  {} - Tidak ada harga, skip", position.symbol);
+            println!("[SELL EVAL] ⚠️  {} - No price available, skipping", position.symbol);
         }
     }
 
@@ -320,10 +320,10 @@ pub fn evaluate_all_positions(
 }
 
 // ============================================================
-// FORMAT NOTIFIKASI TELEGRAM
+// TELEGRAM NOTIFICATION FORMATTING
 // ============================================================
 
-/// Format notifikasi sell — mendukung partial TP dan full close
+/// Format sell notification — supports partial TP and full close
 pub fn format_sell_notification(
     position: &Position,
     current_price: f64,
@@ -336,11 +336,11 @@ pub fn format_sell_notification(
     let (status_emoji, sell_percent_line) = match trigger {
         SellTrigger::PartialTakeProfit { stage, sell_pct, .. } => (
             "🎯",
-            format!("📊 Dijual: **{:.0}%** posisi (stage {}/2)", sell_pct, stage),
+            format!("📊 Sold: **{:.0}%** of position (stage {}/2)", sell_pct, stage),
         ),
         _ => {
             let emoji = if profit_pct >= 0.0 { "📈" } else { "📉" };
-            (emoji, format!("📊 Dijual: **100%** (close penuh)"))
+            (emoji, format!("📊 Sold: **100%** (full close)"))
         }
     };
 
@@ -357,7 +357,7 @@ pub fn format_sell_notification(
 
     let time_note = match trigger {
         SellTrigger::TimeExit { .. } =>
-            "\n⏰ _Keluar karena posisi stuck — modal dibebaskan untuk peluang baru_",
+            "\n⏰ _Exited due to idle position — capital freed for new opportunities_",
         _ => "",
     };
 
@@ -367,10 +367,10 @@ pub fn format_sell_notification(
         💎 Token: **{}** `({})`\n\
         📍 `{}`\n\n\
         {} P&L: **{}{:.1}%** ({}{:.5} SOL)\n\
-        💰 Masuk: **${:.8}**\n\
-        💰 Sekarang: **${:.8}**\n\
+        💰 Entry: **${:.8}**\n\
+        💰 Now: **${:.8}**\n\
         {}{}\n\
-        ⏰ Durasi: **{} menit**\n\n\
+        ⏰ Duration: **{} minutes**\n\n\
         🔄 Trigger: **{}**\n\
         🔗 TX: `{}`{}\n\n\
         ═══════════════════════════════",
@@ -390,7 +390,7 @@ pub fn format_sell_notification(
     )
 }
 
-/// Format notifikasi buy
+/// Format buy notification
 pub fn format_buy_notification(
     token_address: &str,
     symbol: &str,
@@ -405,12 +405,12 @@ pub fn format_buy_notification(
         ═══════════════════════════════\n\n\
         💎 Token: **{}** `({})`\n\
         📍 `{}`\n\n\
-        💰 Modal: **{:.4} SOL**\n\
-        💵 Harga Masuk: **${:.8}**\n\
-        ⭐ Skor: **{:.1}/100**\n\n\
+        💰 Capital: **{:.4} SOL**\n\
+        💵 Entry Price: **${:.8}**\n\
+        ⭐ Score: **{:.1}/100**\n\n\
         🔗 TX: `{}`\n\n\
         ═══════════════════════════════\n\
-        ⚠️ Trading otomatis — kelola risiko dengan baik",
+        ⚠️ Automated trading — manage your risk",
         name, symbol, token_address,
         amount_sol, price_usd, score,
         &tx_signature[..tx_signature.len().min(20)]

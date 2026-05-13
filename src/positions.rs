@@ -1,5 +1,5 @@
 // ============================================================
-// POSITIONS - Manajemen posisi trading aktif
+// POSITIONS - Active trading position management
 // ============================================================
 
 use chrono::{DateTime, Utc};
@@ -11,9 +11,9 @@ pub struct Position {
     pub symbol: String,
     pub name: String,
     pub buy_price_usd: f64,
-    /// SOL yang diinvestasikan (dikurangi saat partial sell)
+    /// SOL invested (reduced on partial sell)
     pub amount_in_sol: f64,
-    /// Jumlah token yang dipegang (dikurangi saat partial sell)
+    /// Token amount held (reduced on partial sell)
     pub token_amount: f64,
     pub highest_price: f64,
     pub trailing_stop_active: bool,
@@ -22,9 +22,9 @@ pub struct Position {
     pub score_at_entry: f64,
 
     // === 3-STAGE TAKE PROFIT ===
-    /// Sudah jual sebagian di TP1?
+    /// Partial sold at TP1?
     pub tp1_fired: bool,
-    /// Sudah jual sebagian di TP2?
+    /// Partial sold at TP2?
     pub tp2_fired: bool,
 }
 
@@ -70,7 +70,7 @@ impl Position {
         self.trailing_stop_active = true;
         self.trailing_stop_price = self.highest_price * (1.0 - trailing_percent / 100.0);
         println!(
-            "[TRAILING] {} - Trailing stop aktif di ${:.8} ({:.1}% dari puncak)",
+            "[TRAILING] {} - Trailing stop active at ${:.8} ({:.1}% from peak)",
             self.symbol, self.trailing_stop_price, trailing_percent
         );
     }
@@ -81,7 +81,7 @@ impl Position {
         if new_stop > self.trailing_stop_price {
             self.trailing_stop_price = new_stop;
             println!(
-                "[TRAILING] {} - Stop naik ke ${:.8}",
+                "[TRAILING] {} - Stop raised to ${:.8}",
                 self.symbol, self.trailing_stop_price
             );
         }
