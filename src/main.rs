@@ -37,9 +37,10 @@ use std::fs;
 // ============================================================
 // CONFIG - ضع مفاتيحك هنا / Konfigurasi Bot
 // ============================================================
-const SCAN_INTERVAL_SECS: u64     = 30;
-const PROFIT_CHECK_INTERVAL_SECS: u64 = 300;
-const SELL_CHECK_INTERVAL_SECS: u64   = 60;   // Cek posisi setiap 60 detik
+const SCAN_INTERVAL_SECS: u64          = 30;
+const PROFIT_CHECK_INTERVAL_SECS: u64  = 300;
+const SELL_CHECK_INTERVAL_SECS: u64    = 60;    // Cek posisi setiap 60 detik
+const SOL_PRICE_UPDATE_INTERVAL_SECS: u64 = 300; // Refresh harga SOL setiap 5 menit
 const SAVE_INTERVAL_MINS: i64     = 10;
 const MAX_TOKEN_AGE_HOURS: i64    = 6;
 const MIN_SCORE_NEW_TOKEN: f64    = 80.0;
@@ -523,6 +524,7 @@ struct SolanaBot {
     telegram_token: String,
     telegram_chat_id: String,
     sol_price_usd: f64,
+    last_price_update: Instant,
 
     // === FITUR BARU: Live Trading ===
     positions: HashMap<String, Position>,
@@ -621,6 +623,10 @@ impl SolanaBot {
             telegram_token,
             telegram_chat_id,
             sol_price_usd,
+            // Set ke masa lalu agar fetch langsung dilakukan saat loop pertama
+            last_price_update: Instant::now()
+                .checked_sub(Duration::from_secs(SOL_PRICE_UPDATE_INTERVAL_SECS + 1))
+                .unwrap_or_else(Instant::now),
             positions: HashMap::new(),
             trading_config,
             wallet,
@@ -900,6 +906,68 @@ impl SolanaBot {
             }
             _ => vec![],
         }
+    }
+
+    // ============================================================
+    // SOL PRICE - Auto refresh dari API publik
+    // ============================================================
+
+    /// Fetch harga SOL dari multiple sumber dengan fallback.
+    /// Urutan: Jupiter Price API → Binance → CoinGecko → harga lama
+    async fn fetch_sol_price(&self) -> f64 {
+        // --- Sumber 1: Jupiter Price API v6 (paling akurat untuk Solana) ---
+        if let Ok(resp) = self.client
+            .get("https://price.jup.ag/v6/price?ids=SOL")
+            .send()
+            .await
+        {
+            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                if let Some(price) = data["data"]["SOL"]["price"].as_f64() {
+                    if price > 0.0 {
+                        println!("[SOL PRICE] Jupiter: ${:.2}", price);
+                        return price;
+                    }
+                }
+            }
+        }
+
+        // --- Sumber 2: Binance public ticker (no auth required) ---
+        if let Ok(resp) = self.client
+            .get("https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT")
+            .send()
+            .await
+        {
+            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                if let Some(price_str) = data["price"].as_str() {
+                    if let Ok(price) = price_str.parse::<f64>() {
+                        if price > 0.0 {
+                            println!("[SOL PRICE] Binance: ${:.2}", price);
+                            return price;
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Sumber 3: CoinGecko free API ---
+        if let Ok(resp) = self.client
+            .get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd")
+            .send()
+            .await
+        {
+            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                if let Some(price) = data["solana"]["usd"].as_f64() {
+                    if price > 0.0 {
+                        println!("[SOL PRICE] CoinGecko: ${:.2}", price);
+                        return price;
+                    }
+                }
+            }
+        }
+
+        // --- Fallback: pakai harga terakhir yang tersimpan ---
+        println!("[SOL PRICE] Semua sumber gagal, pakai harga lama: ${:.2}", self.sol_price_usd);
+        self.sol_price_usd
     }
 
     // ============================================================
@@ -1968,6 +2036,21 @@ impl SolanaBot {
 
         loop {
             self.reset_daily_count_if_needed();
+
+            // -------------------------------------------------------
+            // AUTO UPDATE HARGA SOL (setiap 5 menit)
+            // -------------------------------------------------------
+            if self.last_price_update.elapsed() >= Duration::from_secs(SOL_PRICE_UPDATE_INTERVAL_SECS) {
+                let new_price = self.fetch_sol_price().await;
+                if (new_price - self.sol_price_usd).abs() > 0.01 {
+                    println!(
+                        "[SOL PRICE] Updated: ${:.2} → ${:.2}",
+                        self.sol_price_usd, new_price
+                    );
+                }
+                self.sol_price_usd = new_price;
+                self.last_price_update = Instant::now();
+            }
 
             // -------------------------------------------------------
             // CEK & SELL POSISI AKTIF (setiap 60 detik)
