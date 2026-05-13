@@ -1602,18 +1602,33 @@ impl SolanaBot {
                 Ok(signature) => {
                     println!("[AUTO BUY] ✅ SUCCESS! TX: {}", signature);
 
-                    // Estimate tokens received (using USD price)
+                    // Compute effective entry price — IDENTICAL formula used by paper trading.
+                    // Jupiter fills at quoted × (1 + slippage% + AMM_impact%).
+                    // Recording this as entry price makes TP/SL math match paper exactly.
+                    let slippage = self.trading_config.default_slippage;
+                    let price_impact_pct = PaperTradingState::calc_price_impact_pct(
+                        amount_sol, signal.liquidity_usd, self.sol_price_usd,
+                    );
+                    let effective_entry_price = signal.current_price_usd
+                        * (1.0 + (slippage + price_impact_pct) / 100.0);
+
+                    println!(
+                        "[AUTO BUY] Quoted: ${:.8} → Effective: ${:.8} | Slip: {:.2}% | Impact: {:.2}%",
+                        signal.current_price_usd, effective_entry_price, slippage, price_impact_pct
+                    );
+
+                    // Token amount based on effective fill price (matches paper trading)
                     let sol_price_usd = self.sol_price_usd;
-                    let token_amount = if signal.current_price_usd > 0.0 {
-                        (amount_sol * sol_price_usd) / signal.current_price_usd
+                    let token_amount = if effective_entry_price > 0.0 {
+                        (amount_sol * sol_price_usd) / effective_entry_price
                     } else { 0.0 };
 
-                    // Create new position
+                    // Create new position with effective entry price (consistent with paper)
                     let position = Position::new(
                         signal.token_address.clone(),
                         signal.symbol.clone(),
                         signal.name.clone(),
-                        signal.current_price_usd,
+                        effective_entry_price,
                         amount_sol,
                         token_amount,
                         signal.total_score,
@@ -1628,6 +1643,9 @@ impl SolanaBot {
                         &signal.name,
                         amount_sol,
                         signal.current_price_usd,
+                        effective_entry_price,
+                        slippage,
+                        price_impact_pct,
                         signal.total_score,
                         &signature,
                     );
@@ -1714,10 +1732,16 @@ impl SolanaBot {
                     Ok(signature) => {
                         println!("[AUTO SELL] ✅ SUCCESS! TX: {}", signature);
 
+                        // Apply sell-side slippage + network fee to P&L stats —
+                        // IDENTICAL to what paper trading's execute_sell() computes.
+                        let effective_sell_price = current_price
+                            * (1.0 - self.trading_config.default_slippage / 100.0);
                         let profit_pct = if buy_price > 0.0 {
-                            (current_price - buy_price) / buy_price * 100.0
+                            (effective_sell_price - buy_price) / buy_price * 100.0
                         } else { 0.0 };
-                        let profit_sol = amount_sol * profit_pct / 100.0;
+                        // Deduct sell network fee from proceeds (paper does the same)
+                        let profit_sol =
+                            amount_sol * profit_pct / 100.0 - strategy::NETWORK_FEE_SOL;
 
                         // Update stats
                         self.data.performance_stats.total_sells += 1;
@@ -1805,27 +1829,23 @@ impl SolanaBot {
 
         let slippage = self.paper_config.default_slippage;
 
-        let config = TradingConfig {
+        // Build paper buy config from live trading_config — override only
+        // paper-specific position size and filter thresholds.
+        // All TP/SL/trailing/time-exit params come from trading_config so
+        // paper and mainnet use exactly the same evaluation criteria.
+        let paper_buy_config = TradingConfig {
             trading_enabled: true,
             max_position_sol: self.paper_config.max_position_sol,
-            min_position_sol: (self.paper_config.max_position_sol * 0.1_f64).max(0.01_f64),
-            take_profit_percent: self.paper_config.take_profit_percent,
-            stop_loss_percent: self.paper_config.stop_loss_percent,
-            trailing_start_percent: self.paper_config.trailing_start_percent,
-            trailing_distance_percent: self.paper_config.trailing_distance_percent,
+            min_position_sol: self.trading_config.min_position_sol
+                .min(self.paper_config.max_position_sol),
             min_score_to_buy: self.paper_config.min_score_to_buy,
             min_liquidity_usd: self.paper_config.min_liquidity_usd,
-            default_slippage: slippage,
             max_positions: self.paper_config.max_positions,
-            max_hold_minutes: 0,
-            time_exit_threshold_pct: 5.0,
-            tp1_percent: 0.0,
-            tp1_sell_percent: 33.0,
-            tp2_percent: 0.0,
-            tp2_sell_percent: 50.0,
+            default_slippage: slippage,
+            ..self.trading_config.clone()
         };
 
-        let decision = evaluate_buy_signal(&signal, &config, &paper_positions_snapshot);
+        let decision = evaluate_buy_signal(&signal, &paper_buy_config, &paper_positions_snapshot);
         log_buy_decision(&signal, &decision);
 
         if let BuyDecision::Buy { amount_sol, .. } = decision {

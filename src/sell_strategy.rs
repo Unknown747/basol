@@ -390,13 +390,18 @@ pub fn format_sell_notification(
     )
 }
 
-/// Format buy notification
+/// Format buy notification — shows both quoted and effective entry price,
+/// slippage, and AMM impact. Mirrors paper trading's buy notification exactly
+/// so you can compare paper vs live side-by-side on Telegram.
 pub fn format_buy_notification(
     token_address: &str,
     symbol: &str,
     name: &str,
     amount_sol: f64,
-    price_usd: f64,
+    quoted_price_usd: f64,
+    effective_entry_price: f64,
+    slippage_pct: f64,
+    price_impact_pct: f64,
     score: f64,
     tx_signature: &str,
 ) -> String {
@@ -406,13 +411,18 @@ pub fn format_buy_notification(
         💎 Token: **{}** `({})`\n\
         📍 `{}`\n\n\
         💰 Capital: **{:.4} SOL**\n\
-        💵 Entry Price: **${:.8}**\n\
+        💵 Quoted Price: **${:.8}**\n\
+        💵 Effective Entry: **${:.8}**\n\
+        📊 Slippage: **{:.2}%** | Impact: **{:.2}%**\n\
         ⭐ Score: **{:.1}/100**\n\n\
         🔗 TX: `{}`\n\n\
         ═══════════════════════════════\n\
         ⚠️ Automated trading — manage your risk",
         name, symbol, token_address,
-        amount_sol, price_usd, score,
+        amount_sol,
+        quoted_price_usd, effective_entry_price,
+        slippage_pct, price_impact_pct,
+        score,
         &tx_signature[..tx_signature.len().min(20)]
     )
 }

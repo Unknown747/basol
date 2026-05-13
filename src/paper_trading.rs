@@ -444,54 +444,6 @@ impl PaperTradingState {
         Ok(trade)
     }
 
-    /// Update positions: trailing stop and highest price
-    pub fn update_positions(
-        &mut self,
-        prices: &HashMap<String, f64>,
-        trailing_start: f64,
-        trailing_distance: f64,
-    ) -> Vec<(String, String, f64)> {
-        let mut to_sell = Vec::new();
-
-        for (addr, pos) in self.positions.iter_mut() {
-            let current_price = match prices.get(addr) {
-                Some(&p) => p,
-                None => continue,
-            };
-
-            if current_price > pos.highest_price {
-                pos.highest_price = current_price;
-            }
-
-            let profit_pct = pos.profit_percent(current_price);
-
-            // Activate trailing stop
-            if profit_pct >= trailing_start && !pos.trailing_stop_active {
-                pos.trailing_stop_active = true;
-                pos.trailing_stop_price = current_price * (1.0 - trailing_distance / 100.0);
-                println!(
-                    "[PAPER TRAILING] {} - Trailing active at ${:.8} (profit: +{:.1}%)",
-                    pos.symbol, pos.trailing_stop_price, profit_pct
-                );
-            }
-
-            // Ratchet trailing stop up
-            if pos.trailing_stop_active {
-                let new_stop = current_price * (1.0 - trailing_distance / 100.0);
-                if new_stop > pos.trailing_stop_price {
-                    pos.trailing_stop_price = new_stop;
-                }
-
-                // Check if trailing stop is hit
-                if current_price <= pos.trailing_stop_price {
-                    to_sell.push((addr.clone(), "Trailing Stop".to_string(), current_price));
-                }
-            }
-        }
-
-        to_sell
-    }
-
     /// Evaluate all positions — supports 3-stage TP, SL, trailing stop, time exit.
     ///
     /// Returns: `Vec<(addr, reason, price, sell_percent, tp_stage)>`
