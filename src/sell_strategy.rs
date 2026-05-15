@@ -336,7 +336,13 @@ pub fn format_sell_notification(
         }
     };
 
-    let profit_sol = position.amount_in_sol * profit_pct / 100.0;
+    // For partial sells (TP1/TP2), profit_sol reflects only the sold fraction —
+    // e.g. TP1 sells 33% so profit = amount * 0.33 * profit_pct/100
+    let sold_fraction = match trigger {
+        SellTrigger::PartialTakeProfit { sell_pct, .. } => sell_pct / 100.0,
+        _ => 1.0,
+    };
+    let profit_sol = position.amount_in_sol * sold_fraction * profit_pct / 100.0;
     let tp_stages  = if position.tp1_fired || position.tp2_fired {
         format!(
             "\n📍 Stage: {}{}",

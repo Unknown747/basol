@@ -3070,7 +3070,7 @@ async fn main() {
         println!("USAGE:");
         println!("  cargo run                 → Run main bot (scan & analyze)");
         println!("  cargo run -- --backtest   → Backtest current strategy");
-        println!("  cargo run -- --compare    → Compare 8 configuration presets at once");
+        println!("  cargo run -- --compare    → Compare 4 configuration presets at once");
         println!("  cargo run -- --help       → Show this help");
         println!();
         println!("ENVIRONMENT VARIABLES (core):");
