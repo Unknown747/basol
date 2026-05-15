@@ -1,4 +1,4 @@
-modules = ["rust-stable"]
+modules = ["rust-stable", "bash"]
 
 [deployment]
 router = "application"
