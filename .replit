@@ -1,4 +1,4 @@
-modules = ["rust-stable", "nodejs-20", "web"]
+modules = ["rust-stable"]
 
 [deployment]
 router = "application"
@@ -24,12 +24,12 @@ args = "Basol Scanner"
 name = "Basol Scanner"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cargo run 2>&1"
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [agent]
 stack = "BEST_EFFORT_FALLBACK"
