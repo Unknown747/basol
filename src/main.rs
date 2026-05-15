@@ -2199,9 +2199,15 @@ impl SolanaBot {
                     let msg = format_paper_sell_notification(&trade, balance);
                     let _ = self.send_message(&msg).await;
 
-                    // Circuit breaker: track consecutive losses
-                    let is_loss = trade.profit_sol < 0.0;
-                    self.handle_trade_result(is_loss).await;
+                    // Circuit breaker: only track result on full position close —
+                    // matches live trading behavior (check_and_sell_positions does the same).
+                    // Partial TP1/TP2 sells must NOT reset consecutive_losses, otherwise
+                    // a TP1 fire between two SL losses would silently clear the counter
+                    // and prevent the circuit breaker from ever triggering.
+                    if tp_stage == 0 {
+                        let is_loss = trade.profit_sol < 0.0;
+                        self.handle_trade_result(is_loss).await;
+                    }
 
                     // Save after sell
                     if let Err(e) = save_paper_state(&self.paper_state) {
@@ -3144,7 +3150,7 @@ async fn main() {
 
 async fn run_compare_mode() {
     println!("══════════════════════════════════════════════════");
-    println!("   COMPARE MODE - 8 Strategy Preset Comparison    ");
+    println!("   COMPARE MODE - 4 Strategy Preset Comparison    ");
     println!("══════════════════════════════════════════════════\n");
 
     let client = match reqwest::Client::builder()
