@@ -622,8 +622,8 @@ fn simulate_on_pairs(
         losing.iter().map(|t| t.profit_pct).sum::<f64>() / losing.len() as f64
     } else { 0.0 };
 
-    let best  = bought.iter().max_by(|a, b| a.profit_pct.partial_cmp(&b.profit_pct).unwrap());
-    let worst = bought.iter().min_by(|a, b| a.profit_pct.partial_cmp(&b.profit_pct).unwrap());
+    let best  = bought.iter().max_by(|a, b| a.profit_pct.total_cmp(&b.profit_pct));
+    let worst = bought.iter().min_by(|a, b| a.profit_pct.total_cmp(&b.profit_pct));
 
     let tp_count    = bought.iter().filter(|t| t.exit_reason == ExitReason::TakeProfit).count();
     let sl_count    = bought.iter().filter(|t| t.exit_reason == ExitReason::StopLoss).count();
@@ -719,7 +719,7 @@ pub async fn run_backtest_compare(
     }
 
     // Sort by net P&L descending
-    scenarios.sort_by(|a, b| b.result.net_pnl_sol.partial_cmp(&a.result.net_pnl_sol).unwrap());
+    scenarios.sort_by(|a, b| b.result.net_pnl_sol.total_cmp(&a.result.net_pnl_sol));
 
     Ok(CompareResult { run_time, scenarios })
 }

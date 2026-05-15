@@ -981,7 +981,7 @@ impl SolanaBot {
 
         let top10_sum: f64 = if amounts.len() >= 10 {
             let mut sorted = amounts.clone();
-            sorted.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            sorted.sort_by(|a, b| b.total_cmp(a));
             sorted[..10].iter().sum()
         } else {
             amounts.iter().sum()
@@ -992,7 +992,7 @@ impl SolanaBot {
         // Gini coefficient
         let gini = if amounts.len() > 1 {
             let mut sorted = amounts.clone();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            sorted.sort_by(|a, b| a.total_cmp(b));
             let n = sorted.len() as f64;
             let sum: f64 = sorted.iter().enumerate()
                 .map(|(i, &v)| (2.0 * (i as f64 + 1.0) - n - 1.0) * v)
