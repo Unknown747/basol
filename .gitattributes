@@ -1,3 +1,4 @@
 target/debug/deps/solana_analyzer-9fc0ea7332841ee3 filter=lfs diff=lfs merge=lfs -text
 target/debug/solana_analyzer filter=lfs diff=lfs merge=lfs -text
 target/debug/deps/solana_analyzer-625457a0a22d4c0c filter=lfs diff=lfs merge=lfs -text
+target/debug/deps/solana_analyzer-2ac366ccaa302604 filter=lfs diff=lfs merge=lfs -text

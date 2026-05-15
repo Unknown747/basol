@@ -563,6 +563,8 @@ struct SolanaBot {
 
     // === Telegram command polling ===
     last_update_id: i64,
+    tg_poll_failures: u32,
+    last_tg_poll: Instant,
 
     // === Scheduled reports ===
     last_daily_report_date: String,
@@ -699,6 +701,8 @@ impl SolanaBot {
             last_score_adjust: Instant::now(),
             // Telegram command polling
             last_update_id: 0,
+            tg_poll_failures: 0,
+            last_tg_poll: Instant::now() - Duration::from_secs(120),
             // Scheduled reports — initialize to current period so we don't
             // send a spurious report immediately on startup
             last_daily_report_date: now_date,
@@ -2042,19 +2046,65 @@ impl SolanaBot {
     // ============================================================
 
     async fn poll_telegram_commands(&mut self) {
+        // Exponential backoff when Telegram API is unavailable:
+        // 0 failures → no extra wait | 1 → 30s | 2 → 60s | 3 → 120s | 4+ → 300s
+        let backoff_secs: u64 = match self.tg_poll_failures {
+            0 => 0,
+            1 => 30,
+            2 => 60,
+            3 => 120,
+            _ => 300,
+        };
+        if self.last_tg_poll.elapsed() < Duration::from_secs(backoff_secs) {
+            return;
+        }
+        self.last_tg_poll = Instant::now();
+
         let url = format!(
             "https://api.telegram.org/bot{}/getUpdates?offset={}&limit=20&timeout=0",
             self.telegram_token,
             self.last_update_id + 1,
         );
+
         let resp = match self.client.get(&url).send().await {
             Ok(r) => r,
-            Err(_) => return,
+            Err(e) => {
+                self.tg_poll_failures += 1;
+                match self.tg_poll_failures {
+                    1 => println!("[TG POLL] Request failed — backing off ({}s): {}", backoff_secs.max(30), e),
+                    n if n % 10 == 0 => println!("[TG POLL] Still unreachable after {} attempts — next retry in {}s", n, 300_u64.min(backoff_secs * 2)),
+                    _ => {}
+                }
+                return;
+            }
         };
+
+        // Handle rate-limit response (HTTP 429)
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            self.tg_poll_failures += 1;
+            if self.tg_poll_failures == 1 {
+                println!("[TG POLL] Rate limited by Telegram (429) — backing off {}s", backoff_secs.max(30));
+            }
+            return;
+        }
+
         let json: serde_json::Value = match resp.json().await {
             Ok(j) => j,
-            Err(_) => return,
+            Err(e) => {
+                self.tg_poll_failures += 1;
+                if self.tg_poll_failures == 1 {
+                    println!("[TG POLL] Failed to parse Telegram response: {}", e);
+                }
+                return;
+            }
         };
+
+        // Restore from backoff
+        if self.tg_poll_failures > 0 {
+            println!("[TG POLL] Connection restored after {} failed attempt(s)", self.tg_poll_failures);
+            self.tg_poll_failures = 0;
+        }
+
         let updates = match json["result"].as_array() {
             Some(u) if !u.is_empty() => u.clone(),
             _ => return,
@@ -2121,11 +2171,14 @@ impl SolanaBot {
                     let parts: Vec<&str> = text.split_whitespace().collect();
                     if let Some(addr) = parts.get(1) {
                         self.data.blacklisted_tokens.insert(addr.to_string());
+                        // Save immediately so the blacklist survives a crash before
+                        // the next periodic save interval
+                        let _ = self.save();
                         let _ = self.send_message(&format!(
                             "⛔ Token `{}` added to blacklist ({} total blocked)",
                             addr, self.data.blacklisted_tokens.len()
                         )).await;
-                        println!("[BLACKLIST] Added: {}", addr);
+                        println!("[BLACKLIST] Added & saved: {}", addr);
                     } else {
                         let _ = self.send_message(&format!(
                             "⛔ **Blacklisted tokens:** {}\n\
