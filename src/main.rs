@@ -551,7 +551,7 @@ struct SolanaBot {
 impl SolanaBot {
     fn new() -> Self {
         // Load .env if present
-        let _ = dotenv::dotenv();
+        let _ = dotenvy::dotenv();
 
         // Read required config from environment (panic with clear message if missing)
         let helius_api_key = std::env::var("HELIUS_API_KEY")
@@ -2240,7 +2240,7 @@ fn format_usd(amount: f64) -> String {
 #[tokio::main]
 async fn main() {
     // Load .env before anything else
-    let _ = dotenv::dotenv();
+    let _ = dotenvy::dotenv();
 
     // --------------------------------------------------------
     // Check CLI arguments
