@@ -19,12 +19,12 @@ use paper_trading::{
     format_paper_report, save_paper_state, load_paper_state,
 };
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Datelike, Timelike};
 use std::fs;
 
 // ============================================================
@@ -377,6 +377,8 @@ struct BotPersistentData {
     last_reset_date: String,
     performance_stats: PerformanceStats,
     positions: HashMap<String, PositionData>,
+    #[serde(default)]
+    blacklisted_tokens: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -546,6 +548,25 @@ struct SolanaBot {
     paper_config: PaperConfig,
     paper_state: PaperTradingState,
     last_paper_report: Instant,
+
+    // === Circuit Breaker ===
+    consecutive_losses: u32,
+    circuit_breaker_until: Option<Instant>,
+    circuit_breaker_losses: u32,
+    circuit_breaker_pause_hours: u64,
+
+    // === Smart Filters ===
+    peak_hours_only: bool,
+    momentum_max_pct: f64,
+    dynamic_min_score: f64,
+    last_score_adjust: Instant,
+
+    // === Telegram command polling ===
+    last_update_id: i64,
+
+    // === Scheduled reports ===
+    last_daily_report_date: String,
+    last_weekly_report_date: String,
 }
 
 impl SolanaBot {
@@ -613,6 +634,27 @@ impl SolanaBot {
             PaperTradingState::new(paper_config.virtual_balance_sol)
         };
 
+        // Extract before move into Self {}
+        let base_min_score = trading_config.min_score_to_buy;
+        let circuit_breaker_losses: u32 = std::env::var("CIRCUIT_BREAKER_LOSSES")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+        let circuit_breaker_pause_hours: u64 = std::env::var("CIRCUIT_BREAKER_PAUSE_HOURS")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+        let peak_hours_only: bool = std::env::var("PEAK_HOURS_ONLY")
+            .map(|v| v == "true" || v == "1").unwrap_or(false);
+        let momentum_max_pct: f64 = std::env::var("MOMENTUM_MAX_PCT")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(30.0);
+
+        println!("[FEATURES] Circuit breaker: {} losses → {}h pause | Peak hours: {} | Momentum max: +{:.0}%",
+            circuit_breaker_losses, circuit_breaker_pause_hours,
+            if peak_hours_only { "ON" } else { "OFF" }, momentum_max_pct);
+
+        let now_date = Utc::now().format("%Y-%m-%d").to_string();
+        let now_week = {
+            let now = Utc::now();
+            format!("{}-W{:02}", now.year(), now.iso_week().week())
+        };
+
         Self {
             client,
             data: BotPersistentData {
@@ -623,6 +665,7 @@ impl SolanaBot {
                 last_reset_date: Utc::now().format("%Y-%m-%d").to_string(),
                 performance_stats: PerformanceStats::default(),
                 positions: HashMap::new(),
+                blacklisted_tokens: HashSet::new(),
             },
             dex_limiter: RateLimiter::new(55, 60),
             helius_limiter: RateLimiter::new(40, 60),
@@ -644,6 +687,22 @@ impl SolanaBot {
             paper_config,
             paper_state,
             last_paper_report: Instant::now(),
+            // Circuit breaker
+            consecutive_losses: 0,
+            circuit_breaker_until: None,
+            circuit_breaker_losses,
+            circuit_breaker_pause_hours,
+            // Smart filters
+            peak_hours_only,
+            momentum_max_pct,
+            dynamic_min_score: base_min_score,
+            last_score_adjust: Instant::now(),
+            // Telegram command polling
+            last_update_id: 0,
+            // Scheduled reports — initialize to current period so we don't
+            // send a spurious report immediately on startup
+            last_daily_report_date: now_date,
+            last_weekly_report_date: now_week,
         }
     }
 
@@ -1313,8 +1372,26 @@ impl SolanaBot {
 
     async fn full_analyze(&mut self, token: &DexToken) -> Option<FullTokenAnalysis> {
         let addr = &token.token_address;
+
+        // Blacklist check: skip tokens manually flagged as bad actors
+        if self.data.blacklisted_tokens.contains(addr.as_str()) {
+            println!("  ⏭ Skip — token blacklisted");
+            return None;
+        }
+
         let pairs = self.get_pairs(addr).await;
         if pairs.is_empty() { return None; }
+
+        // Momentum filter: skip tokens that already pumped too much in the past 1h
+        // (we missed the entry window — chasing is high-risk)
+        let h1_change = pairs.first()
+            .and_then(|p| p.price_change.as_ref())
+            .and_then(|pc| pc.h1)
+            .unwrap_or(0.0);
+        if h1_change > self.momentum_max_pct {
+            println!("  ⏭ Skip — already pumped +{:.1}% in 1h (threshold: +{:.0}%)", h1_change, self.momentum_max_pct);
+            return None;
+        }
 
         let holder = self.analyze_holders(addr, &pairs).await;
         if holder.bundled_wallets_detected {
@@ -1687,6 +1764,11 @@ impl SolanaBot {
                             self.data.performance_stats.total_loss_sol += profit_sol.abs();
                         }
 
+                        // Circuit breaker: only track result on full position close
+                        if percentage >= 100.0 {
+                            self.handle_trade_result(profit_sol < 0.0).await;
+                        }
+
                         // Send notification
                         if let Some(pos) = self.positions.get(&addr) {
                             let msg = format_sell_notification(pos, current_price, &trigger, &signature);
@@ -1887,6 +1969,10 @@ impl SolanaBot {
                     let msg = format_paper_sell_notification(&trade, balance);
                     let _ = self.send_message(&msg).await;
 
+                    // Circuit breaker: track consecutive losses
+                    let is_loss = trade.profit_sol < 0.0;
+                    self.handle_trade_result(is_loss).await;
+
                     // Save after sell
                     if let Err(e) = save_paper_state(&self.paper_state) {
                         println!("[PAPER] Failed to save state: {}", e);
@@ -1907,6 +1993,386 @@ impl SolanaBot {
         let report = format_paper_report(&self.paper_state, current_prices);
         println!("[PAPER] Sending periodic report...");
         let _ = self.send_message(&report).await;
+    }
+
+    // ============================================================
+    // CIRCUIT BREAKER — Auto-pause after N consecutive losses
+    // ============================================================
+
+    async fn handle_trade_result(&mut self, is_loss: bool) {
+        if is_loss {
+            self.consecutive_losses += 1;
+            println!("[CIRCUIT] Consecutive losses: {}/{}", self.consecutive_losses, self.circuit_breaker_losses);
+            if self.consecutive_losses >= self.circuit_breaker_losses {
+                let pause_secs = self.circuit_breaker_pause_hours * 3600;
+                self.circuit_breaker_until = Some(Instant::now() + Duration::from_secs(pause_secs));
+                let msg = format!(
+                    "🔴 **Circuit Breaker Activated!**\n\
+                    ═══════════════════════════════\n\
+                    ⚠️ {} consecutive losses detected\n\
+                    ⏸ Buy scanning paused for {} hours\n\
+                    📊 Sell monitoring continues normally\n\
+                    💡 Use /resume to override early",
+                    self.consecutive_losses,
+                    self.circuit_breaker_pause_hours,
+                );
+                let _ = self.send_message(&msg).await;
+                println!("[CIRCUIT] ACTIVATED — buy scan paused for {} hours", self.circuit_breaker_pause_hours);
+            }
+        } else {
+            if self.consecutive_losses > 0 {
+                println!("[CIRCUIT] Consecutive losses reset (profitable trade)");
+            }
+            self.consecutive_losses = 0;
+        }
+    }
+
+    // ============================================================
+    // PEAK HOURS FILTER
+    // ============================================================
+
+    fn is_peak_hours() -> bool {
+        let hour = Utc::now().hour();
+        // 13:00-17:00 UTC (London/NY overlap) and 20:00-00:00 UTC (US evening)
+        matches!(hour, 13..=16 | 20..=23)
+    }
+
+    // ============================================================
+    // TELEGRAM COMMAND POLLING
+    // ============================================================
+
+    async fn poll_telegram_commands(&mut self) {
+        let url = format!(
+            "https://api.telegram.org/bot{}/getUpdates?offset={}&limit=20&timeout=0",
+            self.telegram_token,
+            self.last_update_id + 1,
+        );
+        let resp = match self.client.get(&url).send().await {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        let json: serde_json::Value = match resp.json().await {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+        let updates = match json["result"].as_array() {
+            Some(u) if !u.is_empty() => u.clone(),
+            _ => return,
+        };
+
+        for update in &updates {
+            let update_id = update["update_id"].as_i64().unwrap_or(0);
+            if update_id > self.last_update_id {
+                self.last_update_id = update_id;
+            }
+            let text = update["message"]["text"].as_str()
+                .or_else(|| update["channel_post"]["text"].as_str())
+                .unwrap_or("");
+            let chat_id_num = update["message"]["chat"]["id"].as_i64()
+                .or_else(|| update["channel_post"]["chat"]["id"].as_i64())
+                .unwrap_or(0);
+
+            // Only respond to our configured chat
+            if chat_id_num.to_string() != self.telegram_chat_id {
+                continue;
+            }
+
+            // Extract command (strip @botname suffix if present)
+            let cmd = text.split_whitespace().next().unwrap_or("").split('@').next().unwrap_or("");
+            if cmd.starts_with('/') {
+                println!("[TG CMD] Received: {}", cmd);
+            }
+
+            match cmd {
+                "/status" => {
+                    let msg = self.build_status_message();
+                    let _ = self.send_message(&msg).await;
+                }
+                "/pause" => {
+                    self.is_paused = true;
+                    let _ = self.send_message(
+                        "⏸ **Bot paused manually.**\nSell monitoring continues. Use /resume to restart buying."
+                    ).await;
+                }
+                "/resume" => {
+                    self.is_paused = false;
+                    self.circuit_breaker_until = None;
+                    self.consecutive_losses = 0;
+                    let _ = self.send_message(
+                        "▶️ **Bot resumed.**\nBuy scanning active. Circuit breaker cleared."
+                    ).await;
+                }
+                "/trades" => {
+                    let msg = self.build_trades_message();
+                    let _ = self.send_message(&msg).await;
+                }
+                "/score" => {
+                    let msg = format!(
+                        "🎯 **Score Threshold**\n\
+                        Current (dynamic): **{:.1}**/100\n\
+                        Base (from config): {:.1}/100\n\n\
+                        Auto-adjusts every hour based on last 20 trades.",
+                        self.dynamic_min_score,
+                        self.trading_config.min_score_to_buy,
+                    );
+                    let _ = self.send_message(&msg).await;
+                }
+                "/blacklist" => {
+                    let parts: Vec<&str> = text.split_whitespace().collect();
+                    if let Some(addr) = parts.get(1) {
+                        self.data.blacklisted_tokens.insert(addr.to_string());
+                        let _ = self.send_message(&format!(
+                            "⛔ Token `{}` added to blacklist ({} total blocked)",
+                            addr, self.data.blacklisted_tokens.len()
+                        )).await;
+                        println!("[BLACKLIST] Added: {}", addr);
+                    } else {
+                        let _ = self.send_message(&format!(
+                            "⛔ **Blacklisted tokens:** {}\n\
+                            Usage: `/blacklist <token_address>`",
+                            self.data.blacklisted_tokens.len()
+                        )).await;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn build_status_message(&self) -> String {
+        let cb_status = if let Some(until) = self.circuit_breaker_until {
+            if until > Instant::now() {
+                let remaining_mins = until.duration_since(Instant::now()).as_secs() / 60;
+                format!("🔴 Circuit breaker ({} min left)", remaining_mins)
+            } else {
+                "🟢 Active".to_string()
+            }
+        } else if self.is_paused {
+            "⏸ Manually paused".to_string()
+        } else {
+            "🟢 Active".to_string()
+        };
+
+        let total_pnl = self.paper_state.total_profit_sol - self.paper_state.total_loss_sol;
+        let roi = if self.paper_state.initial_balance_sol > 0.0 {
+            total_pnl / self.paper_state.initial_balance_sol * 100.0
+        } else { 0.0 };
+
+        format!(
+            "📊 **Basol Bot Status**\n\
+            ═══════════════════════════════\n\
+            🤖 Status: {}\n\
+            💰 SOL Price: ${:.2}\n\
+            🎯 Score Threshold: {:.1}/100\n\
+            📈 Consecutive Losses: {}/{}\n\
+            🌍 Peak Hours Only: {}\n\n\
+            💼 **Paper Trading:**\n\
+            💵 Balance: {:.4} SOL\n\
+            📊 Open Positions: {}\n\
+            🏆 Win Rate: {:.1}%\n\
+            💹 Profit Factor: {:.2}\n\
+            💰 Total P&L: {}{:.5} SOL ({}{:.1}% ROI)\n\
+            📈 Total Trades: {}\n\n\
+            🔒 **Live Trading:** {}\n\
+            👁 Seen: {} tokens | ⛔ Blacklisted: {}",
+            cb_status,
+            self.sol_price_usd,
+            self.dynamic_min_score,
+            self.consecutive_losses, self.circuit_breaker_losses,
+            if self.peak_hours_only { "ON" } else { "OFF" },
+            self.paper_state.current_balance_sol,
+            self.paper_state.positions.len(),
+            self.paper_state.win_rate(),
+            self.paper_state.profit_factor(),
+            if total_pnl >= 0.0 { "+" } else { "" }, total_pnl,
+            if roi >= 0.0 { "+" } else { "" }, roi,
+            self.paper_state.total_sells,
+            if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 ACTIVE" } else { "🔴 INACTIVE" },
+            self.data.seen_tokens.len(), self.data.blacklisted_tokens.len(),
+        )
+    }
+
+    fn build_trades_message(&self) -> String {
+        let recent: Vec<_> = self.paper_state.closed_trades.iter().rev().take(10).collect();
+        if recent.is_empty() {
+            return "📋 **No closed trades yet.**\nPaper trading is warming up!".to_string();
+        }
+        let mut msg = format!(
+            "📋 **Last {} Paper Trades:**\n═══════════════════════════════\n",
+            recent.len()
+        );
+        for trade in &recent {
+            let emoji = if trade.profit_percent >= 0.0 { "✅" } else { "❌" };
+            let hold = if trade.hold_duration_minutes < 60 {
+                format!("{}m", trade.hold_duration_minutes)
+            } else {
+                format!("{:.1}h", trade.hold_duration_minutes as f64 / 60.0)
+            };
+            msg.push_str(&format!(
+                "{} **{}** | {}{:.1}% | {}{:.5} SOL | {} | {}\n",
+                emoji,
+                trade.symbol,
+                if trade.profit_percent >= 0.0 { "+" } else { "" },
+                trade.profit_percent,
+                if trade.profit_sol >= 0.0 { "+" } else { "" },
+                trade.profit_sol,
+                hold,
+                trade.exit_reason,
+            ));
+        }
+        msg.push_str(&format!(
+            "\n📊 Win Rate: {:.1}% | P.Factor: {:.2}\n\
+            📈 Best: +{:.1}% ({}) | Worst: {:.1}% ({})",
+            self.paper_state.win_rate(),
+            self.paper_state.profit_factor(),
+            self.paper_state.best_trade_pct, self.paper_state.best_trade_symbol,
+            self.paper_state.worst_trade_pct, self.paper_state.worst_trade_symbol,
+        ));
+        msg
+    }
+
+    // ============================================================
+    // AUTO-ADJUST SCORE THRESHOLD (based on rolling win rate)
+    // ============================================================
+
+    fn adjust_dynamic_score(&mut self) {
+        // Only adjust every 60 minutes
+        if self.last_score_adjust.elapsed() < Duration::from_secs(3600) {
+            return;
+        }
+        self.last_score_adjust = Instant::now();
+
+        if self.paper_state.closed_trades.len() < 5 {
+            return; // Need at least 5 trades to make a meaningful adjustment
+        }
+
+        // Use last 20 trades for rolling win rate
+        let recent: Vec<_> = self.paper_state.closed_trades.iter().rev().take(20).collect();
+        let wins = recent.iter().filter(|t| t.profit_percent > 0.0).count();
+        let win_rate = wins as f64 / recent.len() as f64 * 100.0;
+
+        let old_score = self.dynamic_min_score;
+        let base_score = self.trading_config.min_score_to_buy;
+
+        if win_rate < 40.0 {
+            // Struggling — raise the bar to filter more aggressively
+            self.dynamic_min_score = (self.dynamic_min_score + 2.0).min(95.0);
+        } else if win_rate > 60.0 {
+            // Performing well — gently relax back toward the configured base
+            self.dynamic_min_score = (self.dynamic_min_score - 1.0).max(base_score);
+        }
+
+        if (self.dynamic_min_score - old_score).abs() > 0.01 {
+            println!(
+                "[SCORE] Auto-adjusted: {:.1} → {:.1} (rolling win rate: {:.1}% over {} trades)",
+                old_score, self.dynamic_min_score, win_rate, recent.len()
+            );
+            // Propagate to both live and paper buy configs
+            self.trading_config.min_score_to_buy = self.dynamic_min_score;
+            self.paper_config.min_score_to_buy = self.dynamic_min_score;
+        }
+    }
+
+    // ============================================================
+    // SCHEDULED REPORTS
+    // ============================================================
+
+    async fn send_daily_report_if_needed(&mut self) {
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        if self.last_daily_report_date == today {
+            return;
+        }
+        self.last_daily_report_date = today.clone();
+
+        let total_pnl = self.paper_state.total_profit_sol - self.paper_state.total_loss_sol;
+        let roi = if self.paper_state.initial_balance_sol > 0.0 {
+            total_pnl / self.paper_state.initial_balance_sol * 100.0
+        } else { 0.0 };
+
+        let msg = format!(
+            "📅 **Daily Report — {}**\n\
+            ═══════════════════════════════\n\
+            💼 **Paper Portfolio:**\n\
+            💵 Balance: {:.4} SOL (started: {:.4})\n\
+            📈 ROI: {}{:.2}%\n\
+            📊 Open Positions: {}\n\n\
+            📊 **All-time Paper Stats:**\n\
+            Total Trades: {}\n\
+            Win Rate: {:.1}%\n\
+            Profit Factor: {:.2}\n\
+            Total P&L: {}{:.5} SOL\n\
+            Best Trade: +{:.1}% ({})\n\
+            Worst Trade: {:.1}% ({})\n\n\
+            🎯 Score Threshold: {:.1}/100\n\
+            🛡 Circuit Breaker: {} consecutive losses\n\
+            🔒 Live Trading: {}",
+            today,
+            self.paper_state.current_balance_sol,
+            self.paper_state.initial_balance_sol,
+            if roi >= 0.0 { "+" } else { "" }, roi,
+            self.paper_state.positions.len(),
+            self.paper_state.total_sells,
+            self.paper_state.win_rate(),
+            self.paper_state.profit_factor(),
+            if total_pnl >= 0.0 { "+" } else { "" }, total_pnl,
+            self.paper_state.best_trade_pct, self.paper_state.best_trade_symbol,
+            self.paper_state.worst_trade_pct, self.paper_state.worst_trade_symbol,
+            self.dynamic_min_score,
+            self.consecutive_losses,
+            if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 ON" } else { "🔴 OFF" },
+        );
+        let _ = self.send_message(&msg).await;
+        println!("[DAILY] Report sent for {}", today);
+    }
+
+    async fn send_weekly_report_if_needed(&mut self) {
+        let now = Utc::now();
+        // Only fire on Monday at or after 06:00 UTC
+        if now.weekday() != chrono::Weekday::Mon || now.hour() < 6 {
+            return;
+        }
+        let week_key = format!("{}-W{:02}", now.year(), now.iso_week().week());
+        if self.last_weekly_report_date == week_key {
+            return;
+        }
+        self.last_weekly_report_date = week_key.clone();
+
+        let total_pnl = self.paper_state.total_profit_sol - self.paper_state.total_loss_sol;
+        let roi = if self.paper_state.initial_balance_sol > 0.0 {
+            total_pnl / self.paper_state.initial_balance_sol * 100.0
+        } else { 0.0 };
+
+        let msg = format!(
+            "📅 **Weekly Report — {}**\n\
+            ═══════════════════════════════\n\
+            💼 **Paper Portfolio:**\n\
+            💵 Balance: {:.4} SOL (started: {:.4})\n\
+            📈 Total ROI: {}{:.2}%\n\
+            📊 Open Positions: {}\n\n\
+            📊 **All-time Paper Stats:**\n\
+            Total Trades: {} | Win Rate: {:.1}%\n\
+            Profit Factor: {:.2}\n\
+            Total P&L: {}{:.5} SOL\n\
+            Best: +{:.1}% ({}) | Worst: {:.1}% ({})\n\n\
+            🎯 Score Threshold: {:.1}/100\n\
+            👁 Tokens seen: {} | ⛔ Blacklisted: {}\n\n\
+            💡 Run backtest: `cargo run -- --backtest`",
+            week_key,
+            self.paper_state.current_balance_sol,
+            self.paper_state.initial_balance_sol,
+            if roi >= 0.0 { "+" } else { "" }, roi,
+            self.paper_state.positions.len(),
+            self.paper_state.total_sells,
+            self.paper_state.win_rate(),
+            self.paper_state.profit_factor(),
+            if total_pnl >= 0.0 { "+" } else { "" }, total_pnl,
+            self.paper_state.best_trade_pct, self.paper_state.best_trade_symbol,
+            self.paper_state.worst_trade_pct, self.paper_state.worst_trade_symbol,
+            self.dynamic_min_score,
+            self.data.seen_tokens.len(), self.data.blacklisted_tokens.len(),
+        );
+        let _ = self.send_message(&msg).await;
+        println!("[WEEKLY] Report sent for {}", week_key);
     }
 
     // ============================================================
@@ -2011,23 +2477,31 @@ impl SolanaBot {
         self.load();
 
         let startup_msg = format!(
-            "🤖 **Solana Bot v2.0 Started!**\n\
+            "🤖 **Basol Bot v3.0 Started!**\n\
             ═══════════════════════════════\n\
             📊 Trading Mode: {}\n\
             💰 Max Position: {:.2} SOL\n\
-            📈 Take Profit: {:.1}%\n\
-            🛑 Stop Loss: {:.1}%\n\
-            🔄 Trailing Stop: active after +{:.1}%, distance {:.1}%\n\
-            🔍 Min Buy Score: {:.1}/100\n\
-            💧 Min Liquidity: ${:.0}",
+            📈 Take Profit: {:.1}% | 🛑 Stop Loss: {:.1}%\n\
+            🔄 Trailing: after +{:.1}%, distance {:.1}%\n\
+            🔍 Min Buy Score: {:.1}/100 (auto-adjusts)\n\
+            💧 Min Liquidity: ${:.0}\n\n\
+            🆕 **Active Features:**\n\
+            🛡 Circuit breaker: pause after {} losses ({:.0}h)\n\
+            ⏱ Momentum filter: skip if +{:.0}% h1 already\n\
+            🌍 Peak hours only: {}\n\
+            📋 Commands: /status /pause /resume /trades /score /blacklist",
             if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 ACTIVE" } else { "🔴 ANALYSIS ONLY" },
             self.trading_config.max_position_sol,
             self.trading_config.take_profit_percent,
             self.trading_config.stop_loss_percent,
             self.trading_config.trailing_start_percent,
             self.trading_config.trailing_distance_percent,
-            self.trading_config.min_score_to_buy,
+            self.dynamic_min_score,
             self.trading_config.min_liquidity_usd,
+            self.circuit_breaker_losses,
+            self.circuit_breaker_pause_hours as f64,
+            self.momentum_max_pct,
+            if self.peak_hours_only { "ON (13-17 & 20-00 UTC)" } else { "OFF" },
         );
         let _ = self.send_message(&startup_msg).await;
 
@@ -2051,6 +2525,26 @@ impl SolanaBot {
                 self.sol_price_usd = new_price;
                 self.last_price_update = Instant::now();
             }
+
+            // -------------------------------------------------------
+            // TELEGRAM COMMAND POLLING (every scan cycle)
+            // -------------------------------------------------------
+            self.poll_telegram_commands().await;
+
+            // -------------------------------------------------------
+            // AUTO-ADJUST SCORE THRESHOLD (every hour, needs ≥5 trades)
+            // -------------------------------------------------------
+            self.adjust_dynamic_score();
+
+            // -------------------------------------------------------
+            // DAILY REPORT (fires at midnight UTC)
+            // -------------------------------------------------------
+            self.send_daily_report_if_needed().await;
+
+            // -------------------------------------------------------
+            // WEEKLY REPORT (fires Monday ≥06:00 UTC)
+            // -------------------------------------------------------
+            self.send_weekly_report_if_needed().await;
 
             // -------------------------------------------------------
             // CHECK & SELL ACTIVE POSITIONS (every 60 seconds)
@@ -2088,9 +2582,40 @@ impl SolanaBot {
                 self.last_paper_report = Instant::now();
             }
 
-            if self.is_paused {
-                println!("⏸ Bot paused, waiting 30 seconds...");
+            // -------------------------------------------------------
+            // CIRCUIT BREAKER — reset if timeout expired
+            // -------------------------------------------------------
+            if let Some(until) = self.circuit_breaker_until {
+                if Instant::now() >= until {
+                    self.circuit_breaker_until = None;
+                    self.consecutive_losses = 0;
+                    let _ = self.send_message(
+                        "✅ **Circuit breaker reset.** Buy scanning resumed automatically."
+                    ).await;
+                    println!("[CIRCUIT] Expired — buy scanning resumed");
+                }
+            }
+            let circuit_broken = self.circuit_breaker_until
+                .map(|u| u > Instant::now())
+                .unwrap_or(false);
+
+            if self.is_paused || circuit_broken {
+                let reason = if circuit_broken {
+                    format!("circuit breaker ({} consec. losses)", self.consecutive_losses)
+                } else {
+                    "manual pause".to_string()
+                };
+                println!("⏸ Buy scanning paused ({}) — sell monitoring active", reason);
                 sleep(Duration::from_secs(30)).await;
+                continue;
+            }
+
+            // -------------------------------------------------------
+            // PEAK HOURS FILTER — skip buying outside high-volume windows
+            // -------------------------------------------------------
+            if self.peak_hours_only && !Self::is_peak_hours() {
+                println!("🌙 Off-peak hours ({:02}:00 UTC) — buy scan skipped", Utc::now().hour());
+                sleep(Duration::from_secs(SCAN_INTERVAL_SECS)).await;
                 continue;
             }
 
