@@ -18,13 +18,6 @@ use paper_trading::{
     format_paper_buy_notification, format_paper_sell_notification,
     format_paper_report, save_paper_state, load_paper_state,
 };
-use backtest::{
-    BacktestConfig, CompareResult,
-    run_backtest, run_backtest_compare,
-    print_backtest_report, print_compare_table,
-    format_backtest_telegram, format_compare_telegram,
-    save_backtest_result, save_compare_result,
-};
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -66,6 +59,7 @@ struct DexToken {
     created_at: Option<serde_json::Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 struct PairData {
     #[serde(rename = "chainId")]
@@ -91,6 +85,7 @@ struct PairData {
     txns: Option<TxnsInfo>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 struct TokenBasicInfo {
     address: String,
@@ -103,6 +98,7 @@ struct LiquidityInfo {
     usd: Option<f64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 struct VolumeInfo {
     #[serde(rename = "h24")]
@@ -125,6 +121,7 @@ struct PriceChangeInfo {
     h24: Option<f64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 struct TxnsInfo {
     #[serde(rename = "h1")]
@@ -148,6 +145,7 @@ struct PairResponse {
 // STRUCTURES - Helius API
 // ============================================================
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct HeliusTokenInfo {
     #[serde(rename = "mintAuthority")]
@@ -158,12 +156,14 @@ struct HeliusTokenInfo {
     supply: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct HeliusTokenHolder {
     address: String,
     amount: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct HeliusTransaction {
     signature: String,
@@ -174,6 +174,7 @@ struct HeliusTransaction {
     token_transfers: Option<Vec<TokenTransfer>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 struct TokenTransfer {
     #[serde(rename = "fromUserAccount")]
@@ -189,6 +190,7 @@ struct TokenTransfer {
 // STRUCTURES - Analysis Results
 // ============================================================
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct HolderAnalysis {
     total_holders: u32,
@@ -203,6 +205,7 @@ struct HolderAnalysis {
     signals: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct LiquidityAnalysis {
     total_usd: f64,
@@ -218,6 +221,7 @@ struct LiquidityAnalysis {
     signals: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct WhaleAnalysis {
     smart_wallets_entered: u32,
@@ -229,6 +233,7 @@ struct WhaleAnalysis {
     signals: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct TechnicalAnalysis {
     momentum_5m: f64,
@@ -244,6 +249,7 @@ struct TechnicalAnalysis {
     signals: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ContractSecurity {
     mint_authority_revoked: bool,
@@ -255,6 +261,7 @@ struct ContractSecurity {
     signals: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct SocialAnalysis {
     has_twitter: bool,
@@ -293,6 +300,7 @@ impl LifecyclePhase {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct FullTokenAnalysis {
     token_address: String,
@@ -820,26 +828,6 @@ impl SolanaBot {
         }
     }
 
-    async fn get_boosted_tokens(&mut self) -> Vec<String> {
-        self.dex_limiter.wait_if_needed().await;
-        let url = "https://api.dexscreener.com/token-boosts/latest/v1";
-        #[derive(Deserialize)]
-        struct BoostToken {
-            #[serde(rename = "tokenAddress")] address: String,
-            #[serde(rename = "chainId")] chain: String
-        }
-        match self.client.get(url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                resp.json::<Vec<BoostToken>>().await.unwrap_or_default()
-                    .into_iter()
-                    .filter(|t| t.chain == "solana")
-                    .map(|t| t.address)
-                    .collect()
-            }
-            _ => vec![],
-        }
-    }
-
     // ============================================================
     // HELIUS API
     // ============================================================
@@ -1120,8 +1108,6 @@ impl SolanaBot {
         let txns = self.get_token_transactions(address).await;
         let mut signals = vec![];
         let mut smart_entered = 0u32;
-        let mut cold_storage_transfers = 0u32;
-        let mut has_distribution = false;
         let mut buy_amounts: Vec<f64> = vec![];
         let mut sell_amounts: Vec<f64> = vec![];
 
@@ -1148,7 +1134,7 @@ impl SolanaBot {
 
         let largest_buy = buy_amounts.iter().cloned().fold(0.0_f64, f64::max);
         let accumulation = buy_amounts.len() > sell_amounts.len() * 2;
-        has_distribution = sell_amounts.len() > buy_amounts.len();
+        let has_distribution = sell_amounts.len() > buy_amounts.len();
 
         if smart_entered >= 3 {
             signals.push(format!("🐋 {} smart wallets entered!", smart_entered));
@@ -1156,15 +1142,11 @@ impl SolanaBot {
         if accumulation && !has_distribution {
             signals.push("📈 Clear accumulation pattern — no distribution".to_string());
         }
-        if cold_storage_transfers >= 2 {
-            signals.push(format!("🏦 {} cold storage transfers", cold_storage_transfers));
-        }
 
         let mut score = 0.0f64;
         if smart_entered >= 3 { score += 12.0; }
         else if smart_entered >= 1 { score += 6.0; }
         if accumulation && !has_distribution { score += 5.0; }
-        if cold_storage_transfers >= 2 { score += 3.0; }
         if has_distribution { score -= 5.0; }
         score = score.max(0.0).min(20.0);
 
@@ -1172,7 +1154,7 @@ impl SolanaBot {
             smart_wallets_entered: smart_entered,
             accumulation_pattern: accumulation,
             distribution_signs: has_distribution,
-            cold_storage_transfers,
+            cold_storage_transfers: 0,
             largest_single_buy_usd: largest_buy,
             score,
             signals,
@@ -1508,52 +1490,6 @@ impl SolanaBot {
         m
     }
 
-    fn format_status(&self) -> String {
-        let stats = &self.data.performance_stats;
-        let pos_summary = if self.positions.is_empty() {
-            "No active positions".to_string()
-        } else {
-            self.positions.values()
-                .map(|p| format!("{} ({:.1}%)", p.symbol,
-                    p.profit_percent(p.highest_price)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        format!(
-            "📊 **Bot Status**\n═══════════════════════════════\n\
-            🔍 Seen Tokens: **{}**\n\
-            📌 Tracked Tokens: **{}**\n\
-            📢 Today's Alerts: **{}/{}**\n\
-            🏆 Total Alerts: **{}**\n\
-            💹 Tokens reached 2x: **{}**\n\
-            💹 Tokens reached 5x: **{}**\n\
-            💹 Tokens reached 10x: **{}**\n\
-            🥇 Best Token: **{}** ({:.1}%)\n\
-            🤖 Bot Status: **{}**\n\n\
-            💼 **Trading:**\n\
-            🔄 Mode: **{}**\n\
-            📊 Active Positions: **{}**\n\
-            💰 Total Buys: **{}** | Total Sells: **{}**\n\
-            📈 Total Profit: **{:.4} SOL** | Loss: **{:.4} SOL**\n\
-            📋 Positions: {}",
-            self.data.seen_tokens.len(),
-            self.data.tracked_tokens.len(),
-            self.data.daily_alert_count, MAX_DAILY_ALERTS,
-            stats.total_alerts_sent,
-            stats.tokens_reached_2x,
-            stats.tokens_reached_5x,
-            stats.tokens_reached_10x,
-            stats.best_token_symbol, stats.best_token_gain_percent,
-            if self.is_paused { "⏸ Paused" } else { "▶️ Running" },
-            if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 ACTIVE" } else { "🔴 INACTIVE" },
-            self.positions.len(),
-            stats.total_buys, stats.total_sells,
-            stats.total_profit_sol, stats.total_loss_sol,
-            pos_summary,
-        )
-    }
-
     // ============================================================
     // AUTO BUY - Execute purchase after analysis
     // ============================================================
@@ -1710,7 +1646,7 @@ impl SolanaBot {
         // Execute sells for triggered positions
         for (addr, decision) in decisions {
             if let SellDecision::Sell { percentage, trigger } = decision {
-                let (symbol, name, buy_price, amount_sol) = {
+                let (symbol, _name, buy_price, amount_sol) = {
                     let pos = match self.positions.get(&addr) {
                         Some(p) => p,
                         None => continue,

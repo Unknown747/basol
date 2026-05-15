@@ -57,6 +57,7 @@ pub struct SwapResponse {
     pub swap_transaction: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TokenAccountInfo {
     pub amount: String,

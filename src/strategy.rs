@@ -25,6 +25,7 @@ pub const DEFAULT_PRICE_IMPACT_PCT: f64 = 0.17;
 ///
 /// Useful for showing the user actual costs,
 /// not just the TP/SL numbers visible on screen.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct FeeAnalysis {
     /// Entry cost: slippage + price impact + network fee (in SOL)
@@ -266,75 +267,13 @@ impl TradingConfig {
         }
     }
 
-    /// Safe default config (for testing without .env) — 3-stage disabled
-    pub fn default_safe() -> Self {
-        Self {
-            trading_enabled: false,
-            max_position_sol: 0.5,
-            min_position_sol: 0.05,
-            take_profit_percent: 40.0,
-            stop_loss_percent: 15.0,
-            trailing_start_percent: 20.0,
-            trailing_distance_percent: 5.0,
-            min_score_to_buy: 85.0,
-            min_liquidity_usd: 10_000.0,
-            default_slippage: 1.0,
-            max_positions: 5,
-            max_hold_minutes: 0,
-            time_exit_threshold_pct: 5.0,
-            tp1_percent: 0.0,
-            tp1_sell_percent: 33.0,
-            tp2_percent: 0.0,
-            tp2_sell_percent: 50.0,
-        }
-    }
-
-    /// Scalping preset for small capital (0.05–0.2 SOL per trade).
-    ///
-    /// **3-Stage Take Profit (0.05 SOL, 1.5% slippage, $5k pool):**
-    ///
-    /// ```
-    /// TP1 +12% → sell 33% → net +8.2% on that portion (SAFE, above break-even 3.81%)
-    /// TP2 +20% → sell 50% of remainder → net +16.2% on that portion
-    /// TP3 +35% → sell all remaining → net +31.2% (bonus if market keeps running)
-    ///    OR trailing stop 3% protects remaining position
-    /// SL  -8%  → sell ALL 100% immediately → net -11.3%
-    /// ```
-    ///
-    /// **Distribution of 0.05 SOL:**
-    /// - TP1: sell 0.0167 SOL → receive back ~0.0180 SOL (+8.2%)
-    /// - TP2: sell 0.0167 SOL from remainder → receive back ~0.0194 SOL (+16.2%)
-    /// - TP3: sell last 0.0167 SOL → receive back ~0.0219 SOL (+31.2%)
-    ///
-    /// **After TP1 fires: cannot lose even if price reverses!**
-    pub fn scalping_preset() -> Self {
-        Self {
-            trading_enabled: false,
-            max_position_sol: 0.05,
-            min_position_sol: 0.05,
-            take_profit_percent: 35.0,   // TP3 / final TP if market keeps climbing
-            stop_loss_percent: 8.0,
-            trailing_start_percent: 12.0, // trailing activates alongside TP1
-            trailing_distance_percent: 3.0,
-            min_score_to_buy: 87.0,
-            min_liquidity_usd: 5_000.0,
-            default_slippage: 1.5,
-            max_positions: 2,
-            max_hold_minutes: 40,
-            time_exit_threshold_pct: 3.0,
-            tp1_percent: 12.0,           // TP1 at +12%
-            tp1_sell_percent: 33.0,      // sell 33% of position
-            tp2_percent: 20.0,           // TP2 at +20%
-            tp2_sell_percent: 50.0,      // sell 50% of remainder (= 33% of original)
-                                         // remaining 34% of original managed by trailing/TP3
-        }
-    }
 }
 
 // ============================================================
 // TOKEN SIGNAL
 // ============================================================
 
+#[allow(dead_code)]
 pub struct BuySignal {
     pub token_address: String,
     pub symbol: String,

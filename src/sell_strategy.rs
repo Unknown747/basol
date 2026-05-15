@@ -24,7 +24,6 @@ pub enum SellTrigger {
     TrailingStop { profit_percent: f64 },
     /// Position stuck too long — exit to free up capital
     TimeExit { hold_minutes: i64, profit_percent: f64 },
-    ManualSell,
 }
 
 impl SellTrigger {
@@ -48,7 +47,6 @@ impl SellTrigger {
                     if *profit_percent >= 0.0 { "+" } else { "" },
                     profit_percent
                 ),
-            SellTrigger::ManualSell => "MANUAL SELL".to_string(),
         }
     }
 
@@ -59,13 +57,7 @@ impl SellTrigger {
             SellTrigger::StopLoss { .. }           => "🛑",
             SellTrigger::TrailingStop { .. }       => "📉",
             SellTrigger::TimeExit { .. }           => "⏰",
-            SellTrigger::ManualSell                => "👤",
         }
-    }
-
-    /// Is this a partial sell (not a full close)?
-    pub fn is_partial(&self) -> bool {
-        matches!(self, SellTrigger::PartialTakeProfit { .. })
     }
 }
 

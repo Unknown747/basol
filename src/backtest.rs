@@ -15,6 +15,7 @@ use std::collections::HashMap;
 // BACKTEST CONFIGURATION
 // ============================================================
 
+#[allow(dead_code)]
 pub struct BacktestConfig {
     pub token_limit: usize,
     pub min_age_hours: i64,
@@ -59,6 +60,7 @@ struct DsTokenProfile {
     chain_id: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct DsProfileResponse(Vec<DsTokenProfile>);
 
@@ -93,6 +95,7 @@ struct DsLiquidity {
     usd: Option<f64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 struct DsVolume {
     m5: Option<f64>,
@@ -109,6 +112,7 @@ struct DsPriceChange {
     h24: Option<f64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 struct DsTxns {
     m5: Option<DsTxnCount>,
@@ -143,7 +147,7 @@ pub struct PriceTimeline {
 
 impl PriceTimeline {
     /// Reconstruct from DexScreener data using price change percentages
-    pub fn reconstruct(current_price: f64, price_change: &DsPriceChange) -> Self {
+    fn reconstruct(current_price: f64, price_change: &DsPriceChange) -> Self {
         // Past price = current_price / (1 + change%)
         let at_24h = if let Some(ch) = price_change.h24 {
             current_price / (1.0 + ch / 100.0)
