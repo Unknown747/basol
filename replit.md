@@ -63,7 +63,8 @@ install.sh         — one-click install/update untuk Ubuntu VPS (systemd)
 - **Momentum Filter**: `MOMENTUM_MAX_PCT=30.0` — skip token yang sudah pump >30% dalam 1 jam (terlambat entry).
 - **Token Blacklist**: `/blacklist <addr>` via Telegram — skip token permanen, disimpan ke `bot_data.json`.
 - **Auto-Adjust Score**: setiap jam, bot evaluasi 20 trade terakhir. Win rate <40% → naikkan threshold +2 (max 95). Win rate >60% → turunkan -1 (min = base config).
-- **Telegram Commands**: `/status`, `/pause`, `/resume`, `/trades`, `/score`, `/blacklist`
+- **Helius Key Rotation**: auto-rotate ke key berikutnya saat 429 rate limit. Tambah key via `HELIUS_API_KEY_2`, `HELIUS_API_KEY_3`, dst. Test semua key via `/helius`.
+- **Telegram Commands**: `/status`, `/pause`, `/resume`, `/trades`, `/score`, `/blacklist`, `/helius`
 - **Daily Report**: kirim ke Telegram setiap tengah malam UTC — balance, ROI, win rate, best/worst trade.
 - **Weekly Report**: kirim tiap Senin 06:00 UTC — summary mingguan + semua stats.
 
@@ -86,6 +87,7 @@ install.sh         — one-click install/update untuk Ubuntu VPS (systemd)
 
 ## Pointers
 
+- Helius key rotation: tambah `HELIUS_API_KEY_2`, `HELIUS_API_KEY_3`, ..., `HELIUS_API_KEY_10` di Replit Secrets — bot auto-rotate saat 429. Atau gunakan `HELIUS_API_KEYS` berisi comma-separated keys.
 - Scalping preset ENV: lihat bagian `⚡ SCALPING PRESET` di `.env.example`
 - 3-stage TP ENV: `TP1_PERCENT`, `TP1_SELL_PERCENT`, `TP2_PERCENT`, `TP2_SELL_PERCENT`
 - v3.0 protection ENV: `CIRCUIT_BREAKER_LOSSES`, `CIRCUIT_BREAKER_PAUSE_HOURS`, `PEAK_HOURS_ONLY`, `MOMENTUM_MAX_PCT`

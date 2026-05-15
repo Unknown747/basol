@@ -492,6 +492,133 @@ struct InlineButton {
 // RATE LIMITER
 // ============================================================
 
+// ============================================================
+// HELIUS KEY POOL - Multi-key rotation with auto rate-limit detection
+// ============================================================
+
+struct HeliusKeyPool {
+    keys: Vec<String>,
+    current_index: usize,
+    rate_limited_until: Vec<Option<Instant>>,
+}
+
+impl HeliusKeyPool {
+    fn from_env() -> Self {
+        let _ = dotenvy::dotenv();
+        let mut keys: Vec<String> = Vec::new();
+
+        // Primary key
+        if let Ok(k) = std::env::var("HELIUS_API_KEY") {
+            let k = k.trim().to_string();
+            if !k.is_empty() && k != "your_helius_api_key_here" {
+                keys.push(k);
+            }
+        }
+
+        // Additional keys: HELIUS_API_KEY_2, HELIUS_API_KEY_3, ..., HELIUS_API_KEY_10
+        for i in 2..=10 {
+            if let Ok(k) = std::env::var(format!("HELIUS_API_KEY_{}", i)) {
+                let k = k.trim().to_string();
+                if !k.is_empty() && !keys.contains(&k) {
+                    keys.push(k);
+                }
+            }
+        }
+
+        // Also support comma-separated HELIUS_API_KEYS
+        if let Ok(all) = std::env::var("HELIUS_API_KEYS") {
+            for k in all.split(',') {
+                let k = k.trim().to_string();
+                if !k.is_empty() && !keys.contains(&k) {
+                    keys.push(k);
+                }
+            }
+        }
+
+        if keys.is_empty() {
+            panic!("HELIUS_API_KEY must be set (see .env.example)");
+        }
+
+        let len = keys.len();
+        println!("[HELIUS] Loaded {} key(s) for rotation", len);
+        Self {
+            keys,
+            current_index: 0,
+            rate_limited_until: vec![None; len],
+        }
+    }
+
+    fn current(&self) -> &str {
+        &self.keys[self.current_index]
+    }
+
+    fn key_count(&self) -> usize {
+        self.keys.len()
+    }
+
+    // Returns masked key for safe logging (first 8 chars + ***)
+    fn masked(&self, index: usize) -> String {
+        let k = &self.keys[index];
+        if k.len() > 8 {
+            format!("{}***", &k[..8])
+        } else {
+            "***".to_string()
+        }
+    }
+
+    // Mark current key as rate-limited and rotate to next available key
+    fn rotate_on_rate_limit(&mut self) {
+        let now = Instant::now();
+        self.rate_limited_until[self.current_index] = Some(now + Duration::from_secs(65));
+        let old_index = self.current_index;
+        let start = self.current_index;
+
+        loop {
+            self.current_index = (self.current_index + 1) % self.keys.len();
+            if self.current_index == start {
+                // All keys rate-limited — pick the one that expires soonest, log warning
+                println!("[HELIUS] ⚠️  All keys rate-limited! Will retry with key #{}", self.current_index + 1);
+                break;
+            }
+            let available = match self.rate_limited_until[self.current_index] {
+                None => true,
+                Some(until) if Instant::now() >= until => {
+                    self.rate_limited_until[self.current_index] = None;
+                    true
+                }
+                _ => false,
+            };
+            if available {
+                break;
+            }
+        }
+
+        println!(
+            "[HELIUS] 429 on key #{} ({}) → rotated to key #{} ({})",
+            old_index + 1, self.masked(old_index),
+            self.current_index + 1, self.masked(self.current_index),
+        );
+    }
+
+    // Build status string showing real-time rate-limit state of each key
+    #[allow(dead_code)]
+    fn status_summary(&self) -> String {
+        let now = Instant::now();
+        self.keys.iter().enumerate().map(|(i, _)| {
+            let label = if i == self.current_index { "▶" } else { "  " };
+            let state = match self.rate_limited_until[i] {
+                None => "✅ OK".to_string(),
+                Some(until) if now >= until => "✅ OK (recovered)".to_string(),
+                Some(until) => {
+                    let secs = until.duration_since(now).as_secs();
+                    format!("⏳ Rate-limited ({}s left)", secs)
+                }
+            };
+            format!("{} Key #{}: {} — {}", label, i + 1, self.masked(i), state)
+        }).collect::<Vec<_>>().join("\n")
+    }
+}
+
 struct RateLimiter {
     calls: Vec<Instant>,
     max_calls: usize,
@@ -532,7 +659,7 @@ struct SolanaBot {
     is_paused: bool,
 
     // Config from environment
-    helius_api_key: String,
+    helius_keys: HeliusKeyPool,
     telegram_token: String,
     telegram_chat_id: String,
     sol_price_usd: f64,
@@ -577,8 +704,7 @@ impl SolanaBot {
         let _ = dotenvy::dotenv();
 
         // Read required config from environment (panic with clear message if missing)
-        let helius_api_key = std::env::var("HELIUS_API_KEY")
-            .expect("HELIUS_API_KEY must be set in .env (see .env.example)");
+        let helius_keys = HeliusKeyPool::from_env();
         let telegram_token = std::env::var("TELEGRAM_BOT_TOKEN")
             .expect("TELEGRAM_BOT_TOKEN must be set in .env (see .env.example)");
         let telegram_chat_id = std::env::var("TELEGRAM_CHAT_ID")
@@ -674,7 +800,7 @@ impl SolanaBot {
             tg_limiter: RateLimiter::new(20, 60),
             last_save: Utc::now(),
             is_paused: false,
-            helius_api_key,
+            helius_keys,
             telegram_token,
             telegram_chat_id,
             sol_price_usd,
@@ -898,11 +1024,16 @@ impl SolanaBot {
     async fn get_token_metadata(&mut self, address: &str) -> Option<HeliusTokenInfo> {
         self.helius_limiter.wait_if_needed().await;
         let url = format!(
-            "https://api.helius.xyz/v0/token-metadata?api-key={}", self.helius_api_key
+            "https://api.helius.xyz/v0/token-metadata?api-key={}", self.helius_keys.current()
         );
         let body = serde_json::json!({ "mintAccounts": [address] });
         match self.client.post(&url).json(&body).send().await {
-            Ok(resp) if resp.status().is_success() => {
+            Ok(resp) => {
+                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    self.helius_keys.rotate_on_rate_limit();
+                    return None;
+                }
+                if !resp.status().is_success() { return None; }
                 let arr: Vec<serde_json::Value> = resp.json().await.ok()?;
                 let item = arr.into_iter().next()?;
                 let _on_chain = item.get("onChainMetadata")?
@@ -937,11 +1068,19 @@ impl SolanaBot {
         self.helius_limiter.wait_if_needed().await;
         let url = format!(
             "https://api.helius.xyz/v1/token-holders?api-key={}&mint={}&limit=50",
-            self.helius_api_key, address
+            self.helius_keys.current(), address
         );
         match self.client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                resp.json::<Vec<HeliusTokenHolder>>().await.unwrap_or_default()
+            Ok(resp) => {
+                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    self.helius_keys.rotate_on_rate_limit();
+                    return vec![];
+                }
+                if resp.status().is_success() {
+                    resp.json::<Vec<HeliusTokenHolder>>().await.unwrap_or_default()
+                } else {
+                    vec![]
+                }
             }
             _ => vec![],
         }
@@ -951,14 +1090,86 @@ impl SolanaBot {
         self.helius_limiter.wait_if_needed().await;
         let url = format!(
             "https://api.helius.xyz/v0/addresses/{}/transactions?api-key={}&type=SWAP&limit=100",
-            address, self.helius_api_key
+            address, self.helius_keys.current()
         );
         match self.client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                resp.json::<Vec<HeliusTransaction>>().await.unwrap_or_default()
+            Ok(resp) => {
+                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    self.helius_keys.rotate_on_rate_limit();
+                    return vec![];
+                }
+                if resp.status().is_success() {
+                    resp.json::<Vec<HeliusTransaction>>().await.unwrap_or_default()
+                } else {
+                    vec![]
+                }
             }
             _ => vec![],
         }
+    }
+
+    // ============================================================
+    // HELIUS KEY TEST - Run at startup and via /helius command
+    // ============================================================
+
+    async fn test_helius_keys(&self) -> String {
+        let count = self.helius_keys.key_count();
+        println!("[HELIUS] Testing {} key(s)...", count);
+        let mut lines = vec![format!("🔑 **Helius Key Test** ({} key(s))\n", count)];
+
+        // Use SOL mint as a lightweight test target
+        let test_mint = "So11111111111111111111111111111111111111112";
+
+        for (i, key) in self.helius_keys.keys.iter().enumerate() {
+            let masked = if key.len() > 8 {
+                format!("{}***", &key[..8])
+            } else {
+                "***".to_string()
+            };
+            let active_marker = if i == self.helius_keys.current_index { " ◀ active" } else { "" };
+
+            let url = format!(
+                "https://api.helius.xyz/v0/token-metadata?api-key={}", key
+            );
+            let body = serde_json::json!({ "mintAccounts": [test_mint] });
+
+            let result = self.client.post(&url).json(&body).send().await;
+            let status_line = match result {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        println!("[HELIUS] Key #{} ({}): ✅ Valid", i + 1, masked);
+                        format!("Key #{} `{}`: ✅ Valid{}", i + 1, masked, active_marker)
+                    } else if status.as_u16() == 429 {
+                        println!("[HELIUS] Key #{} ({}): ⏳ Rate limited (429)", i + 1, masked);
+                        format!("Key #{} `{}`: ⏳ Rate limited{}", i + 1, masked, active_marker)
+                    } else if status.as_u16() == 401 || status.as_u16() == 403 {
+                        println!("[HELIUS] Key #{} ({}): ❌ Invalid/Unauthorized ({})", i + 1, masked, status);
+                        format!("Key #{} `{}`: ❌ Invalid ({}){}", i + 1, masked, status, active_marker)
+                    } else {
+                        println!("[HELIUS] Key #{} ({}): ⚠️  HTTP {}", i + 1, masked, status);
+                        format!("Key #{} `{}`: ⚠️ HTTP {}{}", i + 1, masked, status, active_marker)
+                    }
+                }
+                Err(e) => {
+                    println!("[HELIUS] Key #{} ({}): ❌ Network error: {}", i + 1, masked, e);
+                    format!("Key #{} `{}`: ❌ Error{}", i + 1, masked, active_marker)
+                }
+            };
+            lines.push(status_line);
+        }
+
+        if count > 1 {
+            lines.push(format!(
+                "\n💡 Add more keys as `HELIUS_API_KEY_2`, `HELIUS_API_KEY_3`, etc.\nBot auto-rotates on 429."
+            ));
+        } else {
+            lines.push(
+                "\n💡 Add more keys as `HELIUS_API_KEY_2`, `HELIUS_API_KEY_3` to enable rotation.".to_string()
+            );
+        }
+
+        lines.join("\n")
     }
 
     // ============================================================
@@ -2187,6 +2398,10 @@ impl SolanaBot {
                         )).await;
                     }
                 }
+                "/helius" => {
+                    let report = self.test_helius_keys().await;
+                    let _ = self.send_message(&report).await;
+                }
                 _ => {}
             }
         }
@@ -2529,6 +2744,10 @@ impl SolanaBot {
 
         self.load();
 
+        // Test all Helius keys on startup and log results
+        let key_test = self.test_helius_keys().await;
+        println!("{}", key_test.replace("**", "").replace('`', ""));
+
         let startup_msg = format!(
             "🤖 **Basol Bot v3.0 Started!**\n\
             ═══════════════════════════════\n\
@@ -2542,7 +2761,8 @@ impl SolanaBot {
             🛡 Circuit breaker: pause after {} losses ({:.0}h)\n\
             ⏱ Momentum filter: skip if +{:.0}% h1 already\n\
             🌍 Peak hours only: {}\n\
-            📋 Commands: /status /pause /resume /trades /score /blacklist",
+            🔑 Helius keys: {} loaded (auto-rotation on 429)\n\
+            📋 Commands: /status /pause /resume /trades /score /blacklist /helius",
             if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 ACTIVE" } else { "🔴 ANALYSIS ONLY" },
             self.trading_config.max_position_sol,
             self.trading_config.take_profit_percent,
@@ -2555,6 +2775,7 @@ impl SolanaBot {
             self.circuit_breaker_pause_hours as f64,
             self.momentum_max_pct,
             if self.peak_hours_only { "ON (13-17 & 20-00 UTC)" } else { "OFF" },
+            self.helius_keys.key_count(),
         );
         let _ = self.send_message(&startup_msg).await;
 
