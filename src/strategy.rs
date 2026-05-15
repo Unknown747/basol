@@ -320,6 +320,7 @@ pub fn evaluate_buy_signal(
     signal: &BuySignal,
     config: &TradingConfig,
     existing_positions: &std::collections::HashMap<String, Position>,
+    sol_price_usd: f64,
 ) -> BuyDecision {
     // 1. Check trading enabled
     if !config.trading_enabled {
@@ -385,16 +386,14 @@ pub fn evaluate_buy_signal(
         .max(config.min_position_sol)
         .min(config.max_position_sol);
 
-    // 8. Calculate fee analysis for this position
-    // Use default SOL price 170.0 if not available from signal
-    let sol_price_estimate = 170.0_f64; // fallback; ideally from main bot state
+    // 8. Calculate fee analysis using live SOL price passed from bot state
     let fee_analysis = compute_fee_analysis(
         position_size,
         config.default_slippage,
         config.take_profit_percent,
         config.stop_loss_percent,
         signal.liquidity_usd,
-        sol_price_estimate,
+        sol_price_usd,
     );
 
     let reason = format!(

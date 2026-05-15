@@ -394,6 +394,11 @@ struct PositionData {
     trailing_stop_price: f64,
     entry_time: DateTime<Utc>,
     score_at_entry: f64,
+    // Persisted TP state — prevents TP1/TP2 from re-firing after a bot restart
+    #[serde(default)]
+    tp1_fired: bool,
+    #[serde(default)]
+    tp2_fired: bool,
 }
 
 impl From<&Position> for PositionData {
@@ -410,6 +415,8 @@ impl From<&Position> for PositionData {
             trailing_stop_price: p.trailing_stop_price,
             entry_time: p.entry_time,
             score_at_entry: p.score_at_entry,
+            tp1_fired: p.tp1_fired,
+            tp2_fired: p.tp2_fired,
         }
     }
 }
@@ -428,8 +435,8 @@ impl From<PositionData> for Position {
             trailing_stop_price: d.trailing_stop_price,
             entry_time: d.entry_time,
             score_at_entry: d.score_at_entry,
-            tp1_fired: false,
-            tp2_fired: false,
+            tp1_fired: d.tp1_fired,
+            tp2_fired: d.tp2_fired,
         }
     }
 }
@@ -504,7 +511,6 @@ struct HeliusKeyPool {
 
 impl HeliusKeyPool {
     fn from_env() -> Self {
-        let _ = dotenvy::dotenv();
         let mut keys: Vec<String> = Vec::new();
 
         // Primary key
@@ -572,12 +578,12 @@ impl HeliusKeyPool {
         self.rate_limited_until[self.current_index] = Some(now + Duration::from_secs(65));
         let old_index = self.current_index;
         let start = self.current_index;
+        let mut all_limited = false;
 
         loop {
             self.current_index = (self.current_index + 1) % self.keys.len();
             if self.current_index == start {
-                // All keys rate-limited — pick the one that expires soonest, log warning
-                println!("[HELIUS] ⚠️  All keys rate-limited! Will retry with key #{}", self.current_index + 1);
+                all_limited = true;
                 break;
             }
             let available = match self.rate_limited_until[self.current_index] {
@@ -593,11 +599,18 @@ impl HeliusKeyPool {
             }
         }
 
-        println!(
-            "[HELIUS] 429 on key #{} ({}) → rotated to key #{} ({})",
-            old_index + 1, self.masked(old_index),
-            self.current_index + 1, self.masked(self.current_index),
-        );
+        if all_limited {
+            println!(
+                "[HELIUS] ⚠️  All {} key(s) rate-limited — waiting for key #{} to recover",
+                self.keys.len(), self.current_index + 1
+            );
+        } else {
+            println!(
+                "[HELIUS] 429 on key #{} ({}) → rotated to key #{} ({})",
+                old_index + 1, self.masked(old_index),
+                self.current_index + 1, self.masked(self.current_index),
+            );
+        }
     }
 
     // Build status string showing real-time rate-limit state of each key
@@ -1802,7 +1815,7 @@ impl SolanaBot {
             market_cap: analysis.market_cap,
         };
 
-        let decision = evaluate_buy_signal(&signal, &self.trading_config, &self.positions);
+        let decision = evaluate_buy_signal(&signal, &self.trading_config, &self.positions, self.sol_price_usd);
         log_buy_decision(&signal, &decision);
 
         if let BuyDecision::Buy { amount_sol, reason, .. } = decision {
@@ -2078,7 +2091,7 @@ impl SolanaBot {
             ..self.trading_config.clone()
         };
 
-        let decision = evaluate_buy_signal(&signal, &paper_buy_config, &paper_positions_snapshot);
+        let decision = evaluate_buy_signal(&signal, &paper_buy_config, &paper_positions_snapshot, self.sol_price_usd);
         log_buy_decision(&signal, &decision);
 
         if let BuyDecision::Buy { amount_sol, .. } = decision {
@@ -2650,7 +2663,7 @@ impl SolanaBot {
     async fn check_profits(&mut self) {
         let addresses: Vec<String> = self.data.tracked_tokens.keys().cloned().collect();
         for addr in addresses {
-            self.helius_limiter.wait_if_needed().await;
+            self.dex_limiter.wait_if_needed().await;
             let url = format!("https://api.dexscreener.com/latest/dex/tokens/{}", addr);
             let current_price = match self.client.get(&url).send().await {
                 Ok(r) if r.status().is_success() => {

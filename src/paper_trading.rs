@@ -206,12 +206,13 @@ impl PaperTradingState {
         self.winning_trades as f64 / total as f64 * 100.0
     }
 
-    /// Profit factor (gross profit / gross loss)
+    /// Profit factor (gross profit / gross loss). Capped at 99.99 — f64::INFINITY
+    /// breaks JSON serialization (serde_json encodes it as `null`).
     pub fn profit_factor(&self) -> f64 {
         if self.total_loss_sol == 0.0 {
-            return if self.total_profit_sol > 0.0 { f64::INFINITY } else { 0.0 };
+            return if self.total_profit_sol > 0.0 { 99.99 } else { 0.0 };
         }
-        self.total_profit_sol / self.total_loss_sol
+        (self.total_profit_sol / self.total_loss_sol).min(99.99)
     }
 
     /// Calculate price impact using constant product AMM formula (xy=k)
