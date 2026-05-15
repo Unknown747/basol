@@ -1973,16 +1973,18 @@ impl SolanaBot {
                     Ok(signature) => {
                         println!("[AUTO SELL] ✅ SUCCESS! TX: {}", signature);
 
-                        // Apply sell-side slippage + network fee to P&L stats —
-                        // IDENTICAL to what paper trading's execute_sell() computes.
+                        // Apply sell-side slippage + network fee to P&L stats.
+                        // Use only the sold portion (percentage%), not the full position —
+                        // partial sells (TP1/TP2) only realise a fraction of the position.
                         let effective_sell_price = current_price
                             * (1.0 - self.trading_config.default_slippage / 100.0);
                         let profit_pct = if buy_price > 0.0 {
                             (effective_sell_price - buy_price) / buy_price * 100.0
                         } else { 0.0 };
+                        let sold_sol = amount_sol * percentage / 100.0;
                         // Deduct sell network fee from proceeds (paper does the same)
                         let profit_sol =
-                            amount_sol * profit_pct / 100.0 - strategy::NETWORK_FEE_SOL;
+                            sold_sol * profit_pct / 100.0 - strategy::NETWORK_FEE_SOL;
 
                         // Update stats
                         self.data.performance_stats.total_sells += 1;

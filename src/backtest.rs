@@ -577,7 +577,9 @@ fn simulate_on_pairs(
         }
 
         let score_multiplier = ((score - 75.0) / 25.0).max(0.0).min(1.0);
-        let amount_sol = (score_multiplier * trading_config.max_position_sol).max(0.05);
+        // Use configured min_position_sol (not hardcoded 0.05) so backtest matches live trading
+        let amount_sol = (score_multiplier * trading_config.max_position_sol)
+            .max(trading_config.min_position_sol);
         let (exit_price, exit_reason) = simulate_exit(&timeline, entry_price, trading_config);
 
         let profit_pct = if entry_price > 0.0 {
@@ -611,8 +613,9 @@ fn simulate_on_pairs(
 
     let roi = if total_sol_deployed > 0.0 { net_pnl / total_sol_deployed * 100.0 } else { 0.0 };
     let win_rate = if !bought.is_empty() { winning.len() as f64 / bought.len() as f64 * 100.0 } else { 0.0 };
-    let profit_factor = if total_loss > 0.0 { total_profit / total_loss }
-        else if total_profit > 0.0 { f64::INFINITY }
+    // Cap at 99.99 — f64::INFINITY breaks JSON serialization (serde_json → null)
+    let profit_factor = if total_loss > 0.0 { (total_profit / total_loss).min(99.99) }
+        else if total_profit > 0.0 { 99.99 }
         else { 0.0 };
 
     let avg_profit = if !winning.is_empty() {
