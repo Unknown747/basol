@@ -2466,7 +2466,7 @@ impl SolanaBot {
     // ============================================================
 
     async fn run(&mut self) {
-        println!("🚀 Solana Analysis Bot v2.0 starting...");
+        println!("🚀 Basol Bot v3.0 starting...");
         println!("📊 Trading: {} | Max position: {:.2} SOL | TP: {:.1}% | SL: {:.1}%",
             if self.trading_config.trading_enabled && self.wallet.is_some() { "ACTIVE" } else { "INACTIVE" },
             self.trading_config.max_position_sol,
@@ -2776,7 +2776,7 @@ async fn main() {
     let is_help     = args.iter().any(|a| a == "--help" || a == "-h");
 
     if is_help {
-        println!("Solana Analysis Bot v2.0 + Auto Trade + Paper Trading + Backtest");
+        println!("Basol Bot v3.0 — Solana Memecoin Auto Trader");
         println!();
         println!("USAGE:");
         println!("  cargo run                 → Run main bot (scan & analyze)");
@@ -2784,14 +2784,26 @@ async fn main() {
         println!("  cargo run -- --compare    → Compare 8 configuration presets at once");
         println!("  cargo run -- --help       → Show this help");
         println!();
-        println!("ENVIRONMENT VARIABLES:");
+        println!("ENVIRONMENT VARIABLES (core):");
         println!("  TRADING_ENABLED=false        Master switch for live trading");
         println!("  PAPER_TRADING_ENABLED=false  Simulated trading without real money");
+        println!("  PAPER_BALANCE_SOL=0.1        Virtual paper trading balance");
+        println!("  MIN_SCORE_TO_BUY=89.0        Minimum token score to trigger buy");
+        println!("  MAX_POSITION_SOL=0.03        Max SOL per position");
+        println!();
+        println!("ENVIRONMENT VARIABLES (protection — v3.0):");
+        println!("  CIRCUIT_BREAKER_LOSSES=3     Pause buying after N consecutive losses");
+        println!("  CIRCUIT_BREAKER_PAUSE_HOURS=2  Pause duration in hours");
+        println!("  PEAK_HOURS_ONLY=false        Only buy during 13-17 & 20-00 UTC");
+        println!("  MOMENTUM_MAX_PCT=30.0        Skip tokens already up >N% in 1h");
+        println!();
+        println!("TELEGRAM COMMANDS: /status /pause /resume /trades /score /blacklist");
+        println!();
+        println!("BACKTEST VARS:");
         println!("  BACKTEST_TOKEN_LIMIT=150     Number of tokens for backtest/compare");
         println!("  BACKTEST_MIN_AGE_HOURS=6     Minimum token age (hours)");
         println!("  BACKTEST_MAX_AGE_HOURS=72    Maximum token age (hours)");
         println!("  BACKTEST_MIN_LIQUIDITY=5000  Minimum liquidity in USD");
-        println!("  PAPER_BALANCE_SOL=10.0       Virtual paper trading balance");
         return;
     }
 
@@ -2809,15 +2821,20 @@ async fn main() {
     // Normal mode: Scanner bot
     // --------------------------------------------------------
     println!("══════════════════════════════════════════");
-    println!("   Solana Analysis Bot v2.0 + Auto Trade  ");
+    println!("   Basol Bot v3.0 — Solana Auto Trader    ");
     println!("══════════════════════════════════════════");
     println!("Config from environment:");
-    println!("  TRADING_ENABLED      = {}", std::env::var("TRADING_ENABLED").unwrap_or("false".to_string()));
-    println!("  PAPER_TRADING_ENABLED= {}", std::env::var("PAPER_TRADING_ENABLED").unwrap_or("false".to_string()));
-    println!("  MAX_POSITION_SOL     = {}", std::env::var("MAX_POSITION_SOL").unwrap_or("0.5".to_string()));
-    println!("  TAKE_PROFIT_PERCENT  = {}", std::env::var("TAKE_PROFIT_PERCENT").unwrap_or("40.0".to_string()));
-    println!("  STOP_LOSS_PERCENT    = {}", std::env::var("STOP_LOSS_PERCENT").unwrap_or("15.0".to_string()));
-    println!("  WALLET_PRIVATE_KEY   = {}", if std::env::var("WALLET_PRIVATE_KEY").is_ok() { "✅ SET" } else { "❌ NOT SET" });
+    println!("  TRADING_ENABLED       = {}", std::env::var("TRADING_ENABLED").unwrap_or("false".to_string()));
+    println!("  PAPER_TRADING_ENABLED = {}", std::env::var("PAPER_TRADING_ENABLED").unwrap_or("false".to_string()));
+    println!("  MAX_POSITION_SOL      = {}", std::env::var("MAX_POSITION_SOL").unwrap_or("0.5".to_string()));
+    println!("  TAKE_PROFIT_PERCENT   = {}", std::env::var("TAKE_PROFIT_PERCENT").unwrap_or("40.0".to_string()));
+    println!("  STOP_LOSS_PERCENT     = {}", std::env::var("STOP_LOSS_PERCENT").unwrap_or("15.0".to_string()));
+    println!("  WALLET_PRIVATE_KEY    = {}", if std::env::var("WALLET_PRIVATE_KEY").is_ok() { "✅ SET" } else { "❌ NOT SET" });
+    println!("── Protection (v3.0) ──────────────────────");
+    println!("  CIRCUIT_BREAKER_LOSSES= {}", std::env::var("CIRCUIT_BREAKER_LOSSES").unwrap_or("3".to_string()));
+    println!("  CIRCUIT_BREAKER_PAUSE = {}h", std::env::var("CIRCUIT_BREAKER_PAUSE_HOURS").unwrap_or("2".to_string()));
+    println!("  PEAK_HOURS_ONLY       = {}", std::env::var("PEAK_HOURS_ONLY").unwrap_or("false".to_string()));
+    println!("  MOMENTUM_MAX_PCT      = {}%", std::env::var("MOMENTUM_MAX_PCT").unwrap_or("30.0".to_string()));
     println!("══════════════════════════════════════════");
     println!();
     println!("  Tip: Run 'cargo run -- --backtest' to backtest strategy");
