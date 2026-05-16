@@ -2,7 +2,8 @@
 
 # ── Rust ────────────────────────────────────────────────────
 /target/
-Cargo.lock
+# Cargo.lock intentionally tracked — binary crate needs reproducible builds
+# Cargo.lock
 
 # ── Bot runtime state (generated at runtime, never commit) ──
 bot_data.json
