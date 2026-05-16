@@ -53,9 +53,8 @@ impl PaperConfig {
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(16.0),
             trailing_distance_percent: std::env::var("TRAILING_DISTANCE_PERCENT")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(3.0),
-            min_score_to_buy: std::env::var("PAPER_MIN_SCORE_TO_BUY")
-                .or_else(|_| std::env::var("MIN_SCORE_TO_BUY"))
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(75.0),
+            min_score_to_buy: std::env::var("MIN_SCORE_TO_BUY")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(85.0),
             min_liquidity_usd: std::env::var("MIN_LIQUIDITY_USD")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0),
             // Slippage matches live trading (1.5% default)

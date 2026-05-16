@@ -1758,16 +1758,8 @@ impl SolanaBot {
             MIN_SCORE_OLDER_TOKEN
         };
 
-        // When paper trading is active, let tokens through at the lower paper threshold
-        // so paper buys can fire even if the score doesn't reach the live buy bar.
-        let effective_min = if self.paper_config.enabled {
-            min_score.min(self.paper_config.min_score_to_buy)
-        } else {
-            min_score
-        };
-
-        if total < effective_min {
-            println!("  ⚪ Score too low: {total:.1} < {effective_min:.1}");
+        if total < min_score {
+            println!("  ⚪ Score too low: {total:.1} < {min_score:.1}");
             return None;
         }
 

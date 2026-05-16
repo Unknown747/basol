@@ -15,6 +15,17 @@ Bot trading Solana memecoin otomatis (Rust) — scan token baru, analisis skor, 
 
 ## Konfigurasi
 
+### Hierarki konfigurasi (penting!)
+
+Ada **dua tempat** konfigurasi, masing-masing untuk tujuan berbeda:
+
+| File / Tempat | Isi | Edit di mana |
+|---|---|---|
+| **Replit Secrets** | API keys sensitif (Helius, Telegram, Wallet) | Tab Secrets di Replit |
+| **`config.env`** | Semua setting strategi (TP, SL, skor, posisi, dll) | Edit file ini langsung |
+
+`config.env` selalu menang (override) — **satu-satunya tempat untuk edit strategi.**
+
 ### Secrets (API keys sensitif)
 
 Di **Replit**: simpan di tab Secrets (lebih aman)
