@@ -128,7 +128,7 @@ Saat startup, console akan menampilkan:
 
 ```
 ══════════════════════════════════════════
-   Bot Analisis Solana v2.0 + Auto Trade
+   Basol Bot v3.0 — Solana Auto Trader   
 ══════════════════════════════════════════
   TRADING_ENABLED       = false
   PAPER_TRADING_ENABLED = true
@@ -254,7 +254,7 @@ Output startup yang benar saat live trading aktif:
 
 ```
 ══════════════════════════════════════════
-   Bot Analisis Solana v2.0 + Auto Trade
+   Basol Bot v3.0 — Solana Auto Trader   
 ══════════════════════════════════════════
   TRADING_ENABLED       = true
   WALLET_PRIVATE_KEY    = ✅ SET
@@ -319,13 +319,13 @@ BACKTEST_MIN_LIQUIDITY=5000  # Likuiditas minimum USD
 BACKTEST_MIN_VOLUME=10000    # Volume 24 jam minimum
 ```
 
-### Compare 8 preset sekaligus
+### Compare 4 preset sekaligus
 
 ```bash
 cargo run -- --compare
 ```
 
-Bot menguji 8 kombinasi TP/SL/Trailing secara berurutan dan menampilkan tabel perbandingan win rate, profit, drawdown. Hasil disimpan ke `compare_<timestamp>.json`.
+Bot menguji 4 kombinasi TP/SL/Trailing (Conservative, Scalping, Aggressive, Balanced) secara berurutan dan menampilkan tabel perbandingan win rate, profit, drawdown. Hasil disimpan ke `compare_<timestamp>.json`.
 
 ---
 
@@ -431,6 +431,29 @@ Keduanya bisa aktif bersamaan — bot eksekusi live DAN paper secara paralel unt
 | `TP2_PERCENT` | `0.0` | Trigger TP2 dalam % profit (0 = nonaktif) |
 | `TP2_SELL_PERCENT` | `50.0` | % SISA posisi yang dijual di TP2 |
 
+### v3.0 — Smart Protection
+
+| Variable | Default | Keterangan |
+|----------|---------|------------|
+| `CIRCUIT_BREAKER_LOSSES` | `3` | Pause beli setelah N loss berturut. Sell tetap jalan |
+| `CIRCUIT_BREAKER_PAUSE_HOURS` | `2` | Durasi pause circuit breaker (jam). Resume via `/resume` |
+| `PEAK_HOURS_ONLY` | `false` | `true` = hanya beli 13:00–17:00 UTC dan 20:00–00:00 UTC |
+| `MOMENTUM_MAX_PCT` | `30.0` | Skip token yang sudah pump melebihi X% dalam 1 jam terakhir |
+
+> **Circuit breaker hanya pause sisi beli.** Semua posisi aktif tetap dimonitor dan di-sell seperti biasa — tidak ada posisi yang terlantar.
+
+### Helius Key Rotation
+
+Bot auto-rotate ke key berikutnya saat mendapat error 429 (rate limit). Tambahkan key via:
+
+| Variable | Keterangan |
+|----------|------------|
+| `HELIUS_API_KEY` | Key utama (wajib) |
+| `HELIUS_API_KEY_2` … `HELIUS_API_KEY_10` | Key tambahan — bot pilih otomatis saat rate limit |
+| `HELIUS_API_KEYS` | Alternatif: semua key dalam satu string, pisahkan koma |
+
+Cek status semua key via perintah Telegram `/helius`.
+
 ### Paper trading
 
 | Variable | Default | Keterangan |
@@ -461,7 +484,7 @@ cargo run
 # Backtest strategi saat ini vs data historis DexScreener
 cargo run -- --backtest
 
-# Compare 8 preset konfigurasi sekaligus
+# Compare 4 preset konfigurasi sekaligus (Conservative, Scalping, Aggressive, Balanced)
 cargo run -- --compare
 
 # Tampilkan bantuan dan ringkasan ENV aktif
@@ -486,7 +509,7 @@ Bot menyimpan state otomatis dan melanjutkan dari titik terakhir saat restart.
 | `bot_data.json` | Posisi live aktif, token yang sudah dilihat, statistik harian | Setiap 10 menit |
 | `paper_state.json` | Saldo paper, posisi paper aktif, riwayat trade tertutup | Setiap ada paper buy/sell |
 | `backtest_<ts>.json` | Hasil lengkap satu sesi backtest | Setelah `--backtest` selesai |
-| `compare_<ts>.json` | Hasil perbandingan 8 preset | Setelah `--compare` selesai |
+| `compare_<ts>.json` | Hasil perbandingan 4 preset (Conservative, Scalping, Aggressive, Balanced) | Setelah `--compare` selesai |
 
 **Reset paper trading dari awal:**
 ```bash
@@ -512,7 +535,7 @@ src/
   positions.rs     — Position struct (live): tp1_fired, tp2_fired, amount_in_sol
   paper_trading.rs — PaperTradingState: evaluate_positions (8 param), execute_sell (partial)
   wallet.rs        — WalletManager: Jupiter V6 swap, Solana RPC
-  backtest.rs      — BacktestEngine: DexScreener OHLCV, 8-preset compare
+  backtest.rs      — BacktestEngine: DexScreener OHLCV, 4-preset compare
 ```
 
 ### Alur sell decision (setiap 60 detik)
