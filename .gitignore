@@ -13,6 +13,9 @@ compare_*.json
 # ── Secrets (never commit) ──────────────────────────────────
 .env
 
+# ── User config (local overrides, not committed) ─────────────
+config.env
+
 # compiled output
 dist
 tmp
