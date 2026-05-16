@@ -228,7 +228,7 @@ struct WhaleAnalysis {
     accumulation_pattern: bool,
     distribution_signs: bool,
     cold_storage_transfers: u32,
-    largest_single_buy_usd: f64,
+    largest_single_buy_usd: f64, // NOTE: holds raw token units, not USD (field name is a misnomer)
     score: f64,
     signals: Vec<String>,
 }
@@ -1347,7 +1347,8 @@ impl SolanaBot {
         // Detect bundled wallets (many wallets same timing)
         let bundled = sniper_count >= 5 && sniper_pct > 20.0;
 
-        // Developer sold %
+        // Developer sold % — placeholder (not derived from real on-chain data yet;
+        // not used in scoring, kept for future implementation)
         let dev_sold = if !txns.is_empty() { 15.0 } else { 0.0 };
 
         // Flags
@@ -1395,6 +1396,8 @@ impl SolanaBot {
             .filter_map(|l| l.usd)
             .sum();
 
+        // Heuristic proxy — no on-chain LP burn/lock data available from DexScreener.
+        // High liquidity is used as a positive signal; score credit is modest (+5 max).
         let lp_burned = total_usd > 50_000.0;
         let lp_locked = total_usd > 20_000.0;
         let independent = pairs.len() as u32;
@@ -1467,7 +1470,8 @@ impl SolanaBot {
             }
         }
 
-        let largest_buy = buy_amounts.iter().cloned().fold(0.0_f64, f64::max);
+        // NOTE: buy_amounts holds raw token units (not USD) — named accordingly below
+        let largest_buy_tokens = buy_amounts.iter().cloned().fold(0.0_f64, f64::max);
         let accumulation = buy_amounts.len() > sell_amounts.len() * 2;
         let has_distribution = sell_amounts.len() > buy_amounts.len();
 
@@ -1490,7 +1494,7 @@ impl SolanaBot {
             accumulation_pattern: accumulation,
             distribution_signs: has_distribution,
             cold_storage_transfers: 0,
-            largest_single_buy_usd: largest_buy,
+            largest_single_buy_usd: largest_buy_tokens,
             score,
             signals,
         }
@@ -1811,7 +1815,7 @@ impl SolanaBot {
         m.push_str(&format!("🐋 Whales: **{:.1}/20**\n", a.whale_analysis.score));
         m.push_str(&format!("📈 Technical: **{:.1}/10**\n", a.technical_analysis.score));
         m.push_str(&format!("🛡️ Security: **{:.1}/10**\n", a.contract_security.score));
-        m.push_str(&format!("🌐 Social: **{:.1}/15**\n\n", a.social_analysis.score));
+        m.push_str(&format!("🌐 Social: **{:.1}/10**\n\n", a.social_analysis.score));
 
         m.push_str("💰 **Market Data:**\n");
         if let Some(price) = a.price_usd {
@@ -3351,13 +3355,6 @@ async fn run_compare_mode() {
             println!();
             println!("💡 TIP: To apply the best strategy to the main bot, edit config.env:");
             if let Some(winner) = result.scenarios.first() {
-                let parts: Vec<&str> = winner.label.split('/').collect();
-                for part in &parts {
-                    let kv: Vec<&str> = part.splitn(2, |c: char| !c.is_alphabetic() && c != '_').collect();
-                    if kv.len() >= 1 {
-                        // Print config
-                    }
-                }
                 println!("   Strategy \"{}\" → {}", winner.name, winner.label);
                 println!("   See compare_*.json for full details.");
             }
