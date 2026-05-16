@@ -519,11 +519,13 @@ impl HeliusKeyPool {
     fn from_env() -> Self {
         let mut keys: Vec<String> = Vec::new();
 
-        // Primary key
-        if let Ok(k) = std::env::var("HELIUS_API_KEY") {
-            let k = k.trim().to_string();
-            if !k.is_empty() && k != "your_helius_api_key_here" {
-                keys.push(k);
+        // Primary key — supports single key or comma-separated list (e.g. "key1,key2,key3")
+        if let Ok(raw) = std::env::var("HELIUS_API_KEY") {
+            for k in raw.split(',') {
+                let k = k.trim().to_string();
+                if !k.is_empty() && k != "your_helius_api_key_here" && !keys.contains(&k) {
+                    keys.push(k);
+                }
             }
         }
 
