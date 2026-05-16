@@ -716,8 +716,9 @@ struct SolanaBot {
 
 impl SolanaBot {
     fn new() -> Self {
-        // Load .env if present
-        let _ = dotenvy::dotenv();
+        // Load config.env first (highest priority — user config), then fall back to .env
+        let _ = dotenvy::from_filename_override("config.env");
+        let _ = dotenvy::dotenv_override();
 
         // Read required config from environment (panic with clear message if missing)
         let helius_keys = HeliusKeyPool::from_env();
@@ -2988,7 +2989,14 @@ impl SolanaBot {
                     "manual pause".to_string()
                 };
                 println!("⏸ Buy scanning paused ({}) — sell monitoring active", reason);
-                sleep(Duration::from_secs(30)).await;
+                // Poll Telegram every 3 seconds even while paused
+                let mut waited = 0u64;
+                while waited < SCAN_INTERVAL_SECS {
+                    let tick = 3u64.min(SCAN_INTERVAL_SECS - waited);
+                    sleep(Duration::from_secs(tick)).await;
+                    self.poll_telegram_commands().await;
+                    waited += tick;
+                }
                 continue;
             }
 
@@ -2997,7 +3005,14 @@ impl SolanaBot {
             // -------------------------------------------------------
             if self.peak_hours_only && !Self::is_peak_hours() {
                 println!("🌙 Off-peak hours ({:02}:00 UTC) — buy scan skipped", Utc::now().hour());
-                sleep(Duration::from_secs(SCAN_INTERVAL_SECS)).await;
+                // Poll Telegram every 3 seconds even during off-peak
+                let mut waited = 0u64;
+                while waited < SCAN_INTERVAL_SECS {
+                    let tick = 3u64.min(SCAN_INTERVAL_SECS - waited);
+                    sleep(Duration::from_secs(tick)).await;
+                    self.poll_telegram_commands().await;
+                    waited += tick;
+                }
                 continue;
             }
 
@@ -3121,7 +3136,14 @@ impl SolanaBot {
                 self.last_save = Utc::now();
             }
 
-            sleep(Duration::from_secs(SCAN_INTERVAL_SECS)).await;
+            // Wait for next scan — poll Telegram every 3 seconds so commands respond fast
+            let mut waited = 0u64;
+            while waited < SCAN_INTERVAL_SECS {
+                let tick = 3u64.min(SCAN_INTERVAL_SECS - waited);
+                sleep(Duration::from_secs(tick)).await;
+                self.poll_telegram_commands().await;
+                waited += tick;
+            }
         }
     }
 }
@@ -3146,8 +3168,9 @@ fn format_usd(amount: f64) -> String {
 
 #[tokio::main]
 async fn main() {
-    // Load .env before anything else
-    let _ = dotenvy::dotenv();
+    // Load config.env first (highest priority — user config), then fall back to .env
+    let _ = dotenvy::from_filename_override("config.env");
+    let _ = dotenvy::dotenv_override();
 
     // --------------------------------------------------------
     // Check CLI arguments
