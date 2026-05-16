@@ -181,12 +181,6 @@ if [[ -z "$WALLET_VAL" || "$WALLET_VAL" == *"your_"* ]]; then
     fi
 fi
 
-echo ""
-echo -e "${BOLD}Trading mode:${NC}"
-prompt_optional "TRADING_ENABLED"       "Enable live trading? (true/false)" "false"
-prompt_optional "PAPER_TRADING_ENABLED" "Enable paper trading? (true/false)" "true"
-prompt_optional "PAPER_BALANCE_SOL"     "Paper trading virtual balance (SOL)" "1.0"
-
 success ".env configured"
 
 # ── Auto-create config.env from template if missing ──────────
