@@ -36,8 +36,9 @@ const SELL_CHECK_INTERVAL_SECS: u64    = 60;    // Check positions every 60 seco
 const SOL_PRICE_UPDATE_INTERVAL_SECS: u64 = 300; // Refresh SOL price every 5 minutes
 const SAVE_INTERVAL_MINS: i64     = 10;
 const MAX_TOKEN_AGE_HOURS: i64    = 6;
-const MIN_SCORE_NEW_TOKEN: f64    = 80.0;
-const MIN_SCORE_OLDER_TOKEN: f64  = 85.0;
+// Score thresholds are derived from TradingConfig::min_score_to_buy (read from MIN_SCORE_TO_BUY env)
+// New tokens (<6h old) get a 5-point lower threshold to compensate for less available data.
+// Do NOT hardcode these — always use self.config.min_score_to_buy at call site.
 const MAX_DAILY_ALERTS: u32       = 15;
 
 // ============================================================
@@ -1752,10 +1753,12 @@ impl SolanaBot {
             + technical.score + security.score + social.score;
         let total = (total + lifecycle.entry_timing_score * 0.5).min(100.0);
 
+        // New tokens (<6h) get a 5-point lower bar to compensate for thinner data.
+        // Both thresholds track MIN_SCORE_TO_BUY from config — change config.env to adjust.
         let min_score = if lifecycle.age_minutes < 360 {
-            MIN_SCORE_NEW_TOKEN
+            (self.trading_config.min_score_to_buy - 5.0).max(0.0)
         } else {
-            MIN_SCORE_OLDER_TOKEN
+            self.trading_config.min_score_to_buy
         };
 
         if total < min_score {

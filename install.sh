@@ -189,6 +189,20 @@ prompt_optional "PAPER_BALANCE_SOL"     "Paper trading virtual balance (SOL)" "1
 
 success ".env configured"
 
+# ── Auto-create config.env from template if missing ──────────
+CONFIG_FILE="$INSTALL_DIR/config.env"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    if [[ -f "$INSTALL_DIR/config.env.example" ]]; then
+        cp "$INSTALL_DIR/config.env.example" "$CONFIG_FILE"
+        success "config.env created from template"
+        warn "Review and edit strategy settings: nano $CONFIG_FILE"
+    else
+        warn "config.env.example not found — skipping strategy config setup"
+    fi
+else
+    info "config.env already exists — keeping your existing strategy settings"
+fi
+
 # ── 5. Build release binary ──────────────────────────────────
 step "5/6  Building release binary (this takes 1-3 minutes on first build)"
 
@@ -219,7 +233,11 @@ Wants=network-online.target
 Type=simple
 User=$USER
 WorkingDirectory=$INSTALL_DIR
+# Secrets (HELIUS_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, WALLET_PRIVATE_KEY)
 EnvironmentFile=$ENV_FILE
+# Strategy settings (TP, SL, score thresholds, position sizes, etc.)
+# The - prefix makes this file optional (won't fail if missing)
+EnvironmentFile=-$INSTALL_DIR/config.env
 ExecStart=$BINARY_PATH
 Restart=on-failure
 RestartSec=10
