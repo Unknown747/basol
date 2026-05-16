@@ -931,9 +931,20 @@ impl SolanaBot {
         let resp = self.client.post(&url).json(&payload).send().await?;
         if !resp.status().is_success() {
             let err = resp.text().await?;
+            println!("[TG SEND] ❌ Failed to send message: {}", err);
             return Err(format!("Telegram error: {}", err).into());
         }
         Ok(())
+    }
+
+    // Answer a callback_query so Telegram removes the "loading" spinner on the button
+    async fn answer_callback_query(&self, callback_query_id: &str) {
+        let url = format!(
+            "https://api.telegram.org/bot{}/answerCallbackQuery",
+            self.telegram_token
+        );
+        let payload = serde_json::json!({ "callback_query_id": callback_query_id });
+        let _ = self.client.post(&url).json(&payload).send().await;
     }
 
     async fn send_photo(&mut self, photo_url: &str, caption: &str) {
@@ -2369,6 +2380,52 @@ impl SolanaBot {
             if update_id > self.last_update_id {
                 self.last_update_id = update_id;
             }
+
+            // --- Handle inline button presses (callback_query) ---
+            if !update["callback_query"].is_null() {
+                let cb_id   = update["callback_query"]["id"].as_str().unwrap_or("");
+                let cb_data = update["callback_query"]["data"].as_str().unwrap_or("");
+                let cb_chat = update["callback_query"]["message"]["chat"]["id"].as_i64().unwrap_or(0);
+
+                if cb_chat.to_string() != self.telegram_chat_id {
+                    println!("[TG CALLBACK] Ignored — chat_id {} != configured {}", cb_chat, self.telegram_chat_id);
+                    self.answer_callback_query(cb_id).await;
+                    continue;
+                }
+
+                println!("[TG CALLBACK] Button pressed: {}", cb_data);
+                // Answer immediately to remove Telegram's loading spinner
+                self.answer_callback_query(cb_id).await;
+
+                match cb_data {
+                    "/pause" => {
+                        self.is_paused = true;
+                        let _ = self.send_message(
+                            "⏸ *Bot paused via button.*\nSell monitoring continues. Use /resume to restart buying."
+                        ).await;
+                    }
+                    "/resume" => {
+                        self.is_paused = false;
+                        self.circuit_breaker_until = None;
+                        self.consecutive_losses = 0;
+                        let _ = self.send_message(
+                            "▶️ *Bot resumed.*\nBuy scanning active. Circuit breaker cleared."
+                        ).await;
+                    }
+                    "/status" | "/stats" => {
+                        let msg = self.build_status_message();
+                        let _ = self.send_message(&msg).await;
+                    }
+                    "/trades" => {
+                        let msg = self.build_trades_message();
+                        let _ = self.send_message(&msg).await;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // --- Handle text messages and channel posts ---
             let text = update["message"]["text"].as_str()
                 .or_else(|| update["channel_post"]["text"].as_str())
                 .unwrap_or("");
@@ -2376,8 +2433,14 @@ impl SolanaBot {
                 .or_else(|| update["channel_post"]["chat"]["id"].as_i64())
                 .unwrap_or(0);
 
+            // Skip non-message updates (e.g. edited messages)
+            if chat_id_num == 0 {
+                continue;
+            }
+
             // Only respond to our configured chat
             if chat_id_num.to_string() != self.telegram_chat_id {
+                println!("[TG CMD] Ignored message from unknown chat_id: {} (expected: {})", chat_id_num, self.telegram_chat_id);
                 continue;
             }
 
@@ -2390,12 +2453,14 @@ impl SolanaBot {
             match cmd {
                 "/status" => {
                     let msg = self.build_status_message();
-                    let _ = self.send_message(&msg).await;
+                    if let Err(e) = self.send_message(&msg).await {
+                        println!("[TG CMD] Failed to send /status reply: {}", e);
+                    }
                 }
                 "/pause" => {
                     self.is_paused = true;
                     let _ = self.send_message(
-                        "⏸ **Bot paused manually.**\nSell monitoring continues. Use /resume to restart buying."
+                        "⏸ *Bot paused manually.*\nSell monitoring continues. Use /resume to restart buying."
                     ).await;
                 }
                 "/resume" => {
@@ -2403,7 +2468,7 @@ impl SolanaBot {
                     self.circuit_breaker_until = None;
                     self.consecutive_losses = 0;
                     let _ = self.send_message(
-                        "▶️ **Bot resumed.**\nBuy scanning active. Circuit breaker cleared."
+                        "▶️ *Bot resumed.*\nBuy scanning active. Circuit breaker cleared."
                     ).await;
                 }
                 "/trades" => {
@@ -2412,8 +2477,8 @@ impl SolanaBot {
                 }
                 "/score" => {
                     let msg = format!(
-                        "🎯 **Score Threshold**\n\
-                        Current (dynamic): **{:.1}**/100\n\
+                        "🎯 *Score Threshold*\n\
+                        Current (dynamic): *{:.1}*/100\n\
                         Base (from config): {:.1}/100\n\n\
                         Auto-adjusts every hour based on last 20 trades.",
                         self.dynamic_min_score,
@@ -2435,7 +2500,7 @@ impl SolanaBot {
                         println!("[BLACKLIST] Added & saved: {}", addr);
                     } else {
                         let _ = self.send_message(&format!(
-                            "⛔ **Blacklisted tokens:** {}\n\
+                            "⛔ *Blacklisted tokens:* {}\n\
                             Usage: `/blacklist <token_address>`",
                             self.data.blacklisted_tokens.len()
                         )).await;
