@@ -1,5 +1,18 @@
 # See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
 
+# ── Rust ────────────────────────────────────────────────────
+/target/
+Cargo.lock
+
+# ── Bot runtime state (generated at runtime, never commit) ──
+bot_data.json
+paper_state.json
+backtest_*.json
+compare_*.json
+
+# ── Secrets (never commit) ──────────────────────────────────
+.env
+
 # compiled output
 dist
 tmp

@@ -88,10 +88,19 @@ git fetch --quiet "$REMOTE_NAME" "$BRANCH_NAME"
 
 REMOTE_HASH=$(git rev-parse --short "$REMOTE_BRANCH")
 
+# Un-track runtime/build files that should never be in git
+# (safe to run every time — no-op if already untracked)
+UNTRACK=("bot_data.json" "paper_state.json" "target/" ".env")
+for f in "${UNTRACK[@]}"; do
+    if git ls-files --error-unmatch "$f" &>/dev/null 2>&1; then
+        git rm --cached -r --quiet "$f" 2>/dev/null || true
+        info "Un-tracked from git: $f (file kept on disk)"
+    fi
+done
+
 if [[ "$BEFORE_HASH" == "$REMOTE_HASH" ]]; then
     success "Already up to date ($BEFORE_HASH) — nothing to pull"
     echo ""
-    # Still offer to rebuild in case binary is missing
     if [[ ! -f "$BINARY_PATH" ]]; then
         warn "Binary missing at $BINARY_PATH — will rebuild"
     else
@@ -102,7 +111,28 @@ if [[ "$BEFORE_HASH" == "$REMOTE_HASH" ]]; then
     fi
 else
     info "Updates available — pulling ($BEFORE_HASH → $REMOTE_HASH)"
+
+    # Stash any remaining local changes so pull never aborts
+    STASH_MSG="update.sh auto-stash before pull $(date +%s)"
+    STASHED=false
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        git stash push --quiet -m "$STASH_MSG"
+        STASHED=true
+        info "Local changes stashed temporarily"
+    fi
+
     git pull --ff-only "$REMOTE_NAME" "$BRANCH_NAME"
+
+    # Restore stash (skip bot_data.json / .env conflicts — keep disk version)
+    if [[ "$STASHED" == true ]]; then
+        git stash pop --quiet 2>/dev/null || {
+            warn "Stash pop had conflicts — keeping your local runtime files as-is"
+            git checkout --theirs -- bot_data.json paper_state.json 2>/dev/null || true
+            git stash drop --quiet 2>/dev/null || true
+        }
+        info "Local changes restored"
+    fi
+
     AFTER_HASH=$(git rev-parse --short HEAD)
     success "Code updated to $AFTER_HASH"
     echo ""
