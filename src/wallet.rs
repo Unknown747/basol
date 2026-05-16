@@ -88,11 +88,11 @@ impl WalletManager {
         let private_key_bytes = if pk_trimmed.starts_with('[') {
             // JSON array format
             serde_json::from_str::<Vec<u8>>(pk_trimmed)
-                .map_err(|e| format!("Failed to parse private key JSON array: {}", e))?
+                .map_err(|e| format!("Failed to parse private key JSON array: {e}"))?
         } else if pk_trimmed.len() == 128 {
             // 64-byte hex format
             hex::decode(pk_trimmed)
-                .map_err(|e| format!("Failed to decode hex private key: {}", e))?
+                .map_err(|e| format!("Failed to decode hex private key: {e}"))?
         } else {
             // base58 format
             bs58_decode(pk_trimmed)?
@@ -110,9 +110,9 @@ impl WalletManager {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+            .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
-        println!("[WALLET] Wallet loaded successfully: {}", public_key);
+        println!("[WALLET] Wallet loaded successfully: {public_key}");
         Ok(Self { client, public_key, private_key_bytes })
     }
 
@@ -133,10 +133,10 @@ impl WalletManager {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("RPC request failed: {}", e))?;
+            .map_err(|e| format!("RPC request failed: {e}"))?;
 
         let data: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+            .map_err(|e| format!("Failed to parse response: {e}"))?;
 
         let lamports = data["result"]["value"]
             .as_u64()
@@ -166,10 +166,10 @@ impl WalletManager {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("RPC request failed: {}", e))?;
+            .map_err(|e| format!("RPC request failed: {e}"))?;
 
         let data: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+            .map_err(|e| format!("Failed to parse response: {e}"))?;
 
         let accounts = data["result"]["value"].as_array();
         if let Some(accs) = accounts {
@@ -178,7 +178,7 @@ impl WalletManager {
                     .as_str()
                     .unwrap_or("0");
                 return amount_str.parse::<f64>()
-                    .map_err(|e| format!("Failed to parse amount: {}", e));
+                    .map_err(|e| format!("Failed to parse amount: {e}"));
             }
         }
         Ok(0.0)
@@ -195,27 +195,26 @@ impl WalletManager {
         let slippage_bps = (slippage * 100.0) as u32;
 
         println!(
-            "[BUY] Attempting to buy {} - {:.4} SOL ({} lamports) slippage {:.1}%",
-            token_address, amount_in_sol, amount_lamports, slippage
+            "[BUY] Attempting to buy {token_address} - {amount_in_sol:.4} SOL ({amount_lamports} lamports) slippage {slippage:.1}%"
         );
 
         let mut last_error = String::new();
         for attempt in 1..=MAX_RETRY {
             match self.execute_buy(token_address, amount_lamports, slippage_bps).await {
                 Ok(sig) => {
-                    println!("[BUY] SUCCESS on attempt {} - signature: {}", attempt, sig);
+                    println!("[BUY] SUCCESS on attempt {attempt} - signature: {sig}");
                     return Ok(sig);
                 }
                 Err(e) => {
                     last_error = e.clone();
-                    println!("[BUY] Failed attempt {}/{}: {}", attempt, MAX_RETRY, e);
+                    println!("[BUY] Failed attempt {attempt}/{MAX_RETRY}: {e}");
                     if attempt < MAX_RETRY {
                         sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
                     }
                 }
             }
         }
-        Err(format!("Buy failed after {} attempts. Last error: {}", MAX_RETRY, last_error))
+        Err(format!("Buy failed after {MAX_RETRY} attempts. Last error: {last_error}"))
     }
 
     async fn execute_buy(
@@ -233,7 +232,7 @@ impl WalletManager {
 
         let price_impact: f64 = quote.price_impact_pct.parse().unwrap_or(0.0);
         if price_impact > 5.0 {
-            return Err(format!("Price impact too high: {:.2}%", price_impact));
+            return Err(format!("Price impact too high: {price_impact:.2}%"));
         }
 
         println!(
@@ -256,7 +255,7 @@ impl WalletManager {
         let token_balance = self.get_token_balance(token_address).await?;
 
         if token_balance <= 0.0 {
-            return Err(format!("No token balance for {}", token_address));
+            return Err(format!("No token balance for {token_address}"));
         }
 
         let decimals = self.get_token_decimals(token_address).await.unwrap_or(6);
@@ -265,8 +264,7 @@ impl WalletManager {
         let slippage_bps = (slippage * 100.0) as u32;
 
         println!(
-            "[SELL] Attempting to sell {} - {:.2}% ({:.6} tokens) slippage {:.1}%",
-            token_address, percentage_to_sell, sell_amount, slippage
+            "[SELL] Attempting to sell {token_address} - {percentage_to_sell:.2}% ({sell_amount:.6} tokens) slippage {slippage:.1}%"
         );
 
         if sell_raw == 0 {
@@ -277,19 +275,19 @@ impl WalletManager {
         for attempt in 1..=MAX_RETRY {
             match self.execute_sell(token_address, sell_raw, slippage_bps).await {
                 Ok(sig) => {
-                    println!("[SELL] SUCCESS on attempt {} - signature: {}", attempt, sig);
+                    println!("[SELL] SUCCESS on attempt {attempt} - signature: {sig}");
                     return Ok(sig);
                 }
                 Err(e) => {
                     last_error = e.clone();
-                    println!("[SELL] Failed attempt {}/{}: {}", attempt, MAX_RETRY, e);
+                    println!("[SELL] Failed attempt {attempt}/{MAX_RETRY}: {e}");
                     if attempt < MAX_RETRY {
                         sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
                     }
                 }
             }
         }
-        Err(format!("Sell failed after {} attempts. Last error: {}", MAX_RETRY, last_error))
+        Err(format!("Sell failed after {MAX_RETRY} attempts. Last error: {last_error}"))
     }
 
     async fn execute_sell(
@@ -324,25 +322,24 @@ impl WalletManager {
         slippage_bps: u32,
     ) -> Result<JupiterQuote, String> {
         let url = format!(
-            "{}?inputMint={}&outputMint={}&amount={}&slippageBps={}",
-            JUPITER_QUOTE_URL, input_mint, output_mint, amount, slippage_bps
+            "{JUPITER_QUOTE_URL}?inputMint={input_mint}&outputMint={output_mint}&amount={amount}&slippageBps={slippage_bps}"
         );
 
         let resp = self.client
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("Quote request failed: {}", e))?;
+            .map_err(|e| format!("Quote request failed: {e}"))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Jupiter quote error {}: {}", status, body));
+            return Err(format!("Jupiter quote error {status}: {body}"));
         }
 
         resp.json::<JupiterQuote>()
             .await
-            .map_err(|e| format!("Failed to parse quote: {}", e))
+            .map_err(|e| format!("Failed to parse quote: {e}"))
     }
 
     async fn build_swap_transaction(&self, quote: &JupiterQuote) -> Result<String, String> {
@@ -361,16 +358,16 @@ impl WalletManager {
             .json(&request)
             .send()
             .await
-            .map_err(|e| format!("Swap request failed: {}", e))?;
+            .map_err(|e| format!("Swap request failed: {e}"))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Jupiter swap error {}: {}", status, body));
+            return Err(format!("Jupiter swap error {status}: {body}"));
         }
 
         let swap_resp: SwapResponse = resp.json().await
-            .map_err(|e| format!("Failed to parse swap response: {}", e))?;
+            .map_err(|e| format!("Failed to parse swap response: {e}"))?;
 
         Ok(swap_resp.swap_transaction)
     }
@@ -381,7 +378,7 @@ impl WalletManager {
 
         let tx_bytes = general_purpose::STANDARD
             .decode(base64_tx)
-            .map_err(|e| format!("Failed to decode base64 transaction: {}", e))?;
+            .map_err(|e| format!("Failed to decode base64 transaction: {e}"))?;
 
         let signature_bytes = sign_transaction(&tx_bytes, &self.private_key_bytes)?;
         let signed_tx = inject_signature(tx_bytes, signature_bytes)?;
@@ -409,13 +406,13 @@ impl WalletManager {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("Failed to send transaction: {}", e))?;
+            .map_err(|e| format!("Failed to send transaction: {e}"))?;
 
         let data: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Failed to parse send response: {}", e))?;
+            .map_err(|e| format!("Failed to parse send response: {e}"))?;
 
         if let Some(err) = data.get("error") {
-            return Err(format!("RPC error: {}", err));
+            return Err(format!("RPC error: {err}"));
         }
 
         let signature = data["result"]
@@ -442,10 +439,10 @@ impl WalletManager {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("RPC request failed: {}", e))?;
+            .map_err(|e| format!("RPC request failed: {e}"))?;
 
         let data: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+            .map_err(|e| format!("Failed to parse response: {e}"))?;
 
         Ok(data["result"]["value"]["decimals"].as_u64().unwrap_or(6) as u8)
     }
@@ -469,7 +466,7 @@ fn bs58_decode(input: &str) -> Result<Vec<u8>, String> {
         let digit = ALPHABET
             .iter()
             .position(|&b| b == ch as u8)
-            .ok_or_else(|| format!("Invalid character in base58: '{}'", ch))? as u64;
+            .ok_or_else(|| format!("Invalid character in base58: '{ch}'"))? as u64;
 
         let mut carry = digit;
         for byte in result.iter_mut().rev() {

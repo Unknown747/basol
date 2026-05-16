@@ -308,14 +308,15 @@ pub enum BuyDecision {
 /// Evaluate whether a token should be bought and what position size to use.
 ///
 /// **Position sizing formula (score-based):**
-/// - Score 87 → 48% of max_position_sol
-/// - Score 93 → 72% of max_position_sol
-/// - Score 100 → 100% of max_position_sol
+/// - Score 85 → (85-75)/25 = 0.40 × max_position_sol
+/// - Score 93 → (93-75)/25 = 0.72 × max_position_sol
+/// - Score 100 → 1.00 × max_position_sol
 /// - Result is clamped to [min_position_sol, max_position_sol]
 ///
-/// **Note for small capital:**
-/// With min_position_sol=0.02 and max=0.05, score 87 → max(0.024, 0.02) = 0.024 SOL.
-/// Recommended to set MIN_POSITION_SOL=0.05 for a consistent 0.05 SOL per trade.
+/// **Note for fixed-size scalping (current config):**
+/// With MIN_POSITION_SOL = MAX_POSITION_SOL = 0.03, the score multiplier is always
+/// clamped to 0.03 SOL per trade regardless of score. This is intentional for
+/// consistent risk per trade. To enable dynamic sizing, set MIN_POSITION_SOL lower.
 pub fn evaluate_buy_signal(
     signal: &BuySignal,
     config: &TradingConfig,
@@ -367,6 +368,10 @@ pub fn evaluate_buy_signal(
     }
 
     // 6. Check mint authority revoked
+    // NOTE: In practice this check is never reached from the live scan path because
+    // full_analyze() in main.rs already hard-blocks tokens with a confirmed active
+    // mint authority before calling check_and_buy → evaluate_buy_signal.
+    // Kept here as a safety net for any future callers that bypass full_analyze.
     if !signal.mint_authority_revoked {
         return BuyDecision::Skip {
             reason: "Mint authority not revoked — high rugpull risk".to_string(),

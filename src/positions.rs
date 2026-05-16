@@ -31,6 +31,7 @@ pub struct Position {
 }
 
 impl Position {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         token_address: String,
         symbol: String,

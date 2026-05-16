@@ -234,6 +234,7 @@ impl PaperTradingState {
 
     /// Execute paper buy — 100% simulates mainnet conditions
     /// Includes: network fee, slippage, and AMM pool price impact
+    #[allow(clippy::too_many_arguments)]
     pub fn execute_buy(
         &mut self,
         token_address: String,
@@ -256,7 +257,7 @@ impl PaperTradingState {
         }
 
         if self.positions.contains_key(&token_address) {
-            return Err(format!("Already have a position for {}", symbol));
+            return Err(format!("Already have a position for {symbol}"));
         }
 
         // === MAINNET SIMULATION: Network fee ===
@@ -281,12 +282,8 @@ impl PaperTradingState {
         self.total_buys += 1;
 
         println!(
-            "[PAPER BUY] ✅ {} ({}) | {:.4} SOL @ quoted=${:.8} → effective=${:.8}\n\
-             [PAPER BUY]    Slippage: {:.2}% | Price Impact: {:.2}% | Fee: {:.6} SOL | Tokens: {:.2}",
-            name, symbol, amount_sol,
-            quoted_price_usd, effective_buy_price,
-            slippage_percent, price_impact_pct,
-            NETWORK_FEE_SOL, token_amount,
+            "[PAPER BUY] ✅ {name} ({symbol}) | {amount_sol:.4} SOL @ quoted=${quoted_price_usd:.8} → effective=${effective_buy_price:.8}\n\
+             [PAPER BUY]    Slippage: {slippage_percent:.2}% | Price Impact: {price_impact_pct:.2}% | Fee: {NETWORK_FEE_SOL:.6} SOL | Tokens: {token_amount:.2}",
         );
 
         let position = PaperPosition {
@@ -309,7 +306,7 @@ impl PaperTradingState {
         self.positions.insert(token_address.clone(), position);
 
         let id = if token_address.len() >= 8 { &token_address[..8] } else { &token_address };
-        Ok(format!("PAPER_{}_slip{:.1}_impact{:.2}", id, slippage_percent, price_impact_pct))
+        Ok(format!("PAPER_{id}_slip{slippage_percent:.1}_impact{price_impact_pct:.2}"))
     }
 
     /// Execute paper sell — supports partial sell (3-stage TP) and full close.
@@ -333,7 +330,7 @@ impl PaperTradingState {
         let (sym, name, buy_price, pos_amount_sol, pos_tokens,
              liquidity, score, entry_time, age_min) = {
             let pos = self.positions.get(token_address)
-                .ok_or_else(|| format!("Position not found: {}", token_address))?;
+                .ok_or_else(|| format!("Position not found: {token_address}"))?;
             (
                 pos.symbol.clone(), pos.name.clone(), pos.buy_price_usd,
                 pos.amount_sol, pos.token_amount,
@@ -385,13 +382,19 @@ impl PaperTradingState {
             TradeResult::BreakEven
         };
 
-        if profit_pct > self.best_trade_pct {
-            self.best_trade_pct = profit_pct;
-            self.best_trade_symbol = sym.clone();
-        }
-        if profit_pct < self.worst_trade_pct {
-            self.worst_trade_pct = profit_pct;
-            self.worst_trade_symbol = sym.clone();
+        // Only update best/worst on full close (tp_stage == 0) — partial TP1/TP2
+        // percentages reflect a single stage, not the whole trade. Updating on
+        // partials would show a TP1 partial (+8%) as "best trade" even if the
+        // remaining position later hit SL, which is misleading in /trades reports.
+        if tp_stage == 0 {
+            if profit_pct > self.best_trade_pct {
+                self.best_trade_pct = profit_pct;
+                self.best_trade_symbol = sym.clone();
+            }
+            if profit_pct < self.worst_trade_pct {
+                self.worst_trade_pct = profit_pct;
+                self.worst_trade_symbol = sym.clone();
+            }
         }
 
         let stage_label = match tp_stage {
@@ -489,7 +492,7 @@ impl PaperTradingState {
             if profit_pct <= -stop_loss {
                 to_sell.push((
                     addr.clone(),
-                    format!("Stop Loss {:.1}%", profit_pct),
+                    format!("Stop Loss {profit_pct:.1}%"),
                     current_price, 100.0, 0,
                 ));
                 continue;
@@ -503,7 +506,7 @@ impl PaperTradingState {
                 );
                 to_sell.push((
                     addr.clone(),
-                    format!("TP1 Partial {:.0}% @ +{:.1}%", tp1_sell_pct, profit_pct),
+                    format!("TP1 Partial {tp1_sell_pct:.0}% @ +{profit_pct:.1}%"),
                     current_price, tp1_sell_pct, 1,
                 ));
                 continue;
@@ -517,7 +520,7 @@ impl PaperTradingState {
                 );
                 to_sell.push((
                     addr.clone(),
-                    format!("TP2 Partial {:.0}% @ +{:.1}%", tp2_sell_pct, profit_pct),
+                    format!("TP2 Partial {tp2_sell_pct:.0}% @ +{profit_pct:.1}%"),
                     current_price, tp2_sell_pct, 2,
                 ));
                 continue;
@@ -547,7 +550,7 @@ impl PaperTradingState {
                 if current_price <= pos.trailing_stop_price {
                     to_sell.push((
                         addr.clone(),
-                        format!("Trailing Stop (profit: +{:.1}%)", profit_pct),
+                        format!("Trailing Stop (profit: +{profit_pct:.1}%)"),
                         current_price, 100.0, 0,
                     ));
                     continue;
@@ -564,23 +567,22 @@ impl PaperTradingState {
             if tp3_eligible && profit_pct >= take_profit {
                 to_sell.push((
                     addr.clone(),
-                    format!("Final TP +{:.1}%", profit_pct),
+                    format!("Final TP +{profit_pct:.1}%"),
                     current_price, 100.0, 0,
                 ));
                 continue;
             }
 
             // 6. TIME EXIT — free up idle capital
-            if max_hold_minutes > 0 && age_minutes >= max_hold_minutes as i64 {
-                if profit_pct < time_exit_threshold {
+            if max_hold_minutes > 0 && age_minutes >= max_hold_minutes as i64
+                && profit_pct < time_exit_threshold {
                     to_sell.push((
                         addr.clone(),
-                        format!("Time Exit {} min | P&L: {:.1}%", age_minutes, profit_pct),
+                        format!("Time Exit {age_minutes} min | P&L: {profit_pct:.1}%"),
                         current_price, 100.0, 0,
                     ));
                     continue;
                 }
-            }
         }
 
         to_sell
@@ -611,7 +613,7 @@ pub fn load_paper_state(initial_balance: f64) -> PaperTradingState {
                     state
                 }
                 Err(e) => {
-                    println!("[PAPER] Failed to parse saved state: {} — starting fresh", e);
+                    println!("[PAPER] Failed to parse saved state: {e} — starting fresh");
                     PaperTradingState::new(initial_balance)
                 }
             }
@@ -627,6 +629,7 @@ pub fn load_paper_state(initial_balance: f64) -> PaperTradingState {
 // TELEGRAM NOTIFICATION FORMATTING
 // ============================================================
 
+#[allow(clippy::too_many_arguments)]
 pub fn format_paper_buy_notification(
     symbol: &str,
     name: &str,
@@ -643,23 +646,17 @@ pub fn format_paper_buy_notification(
     format!(
         "📝 **PAPER BUY** 📝\n\
         ═══════════════════════════════\n\n\
-        💎 Token: **{}** `({})`\n\
-        📍 `{}`\n\n\
-        💰 Capital: **{:.4} SOL**\n\
-        💵 Quoted Price: **${:.8}**\n\
-        💵 Effective Price: **${:.8}**\n\
-        📊 Slippage: **{:.2}%** | Impact: **{:.2}%**\n\
-        ⭐ Score: **{:.1}/100**\n\n\
-        💼 Balance After: **{:.4} SOL**\n\
-        📊 Open Positions: **{}**\n\n\
+        💎 Token: **{name}** `({symbol})`\n\
+        📍 `{token_address}`\n\n\
+        💰 Capital: **{amount_sol:.4} SOL**\n\
+        💵 Quoted Price: **${quoted_price:.8}**\n\
+        💵 Effective Price: **${effective_price:.8}**\n\
+        📊 Slippage: **{slippage:.2}%** | Impact: **{price_impact:.2}%**\n\
+        ⭐ Score: **{score:.1}/100**\n\n\
+        💼 Balance After: **{balance_after:.4} SOL**\n\
+        📊 Open Positions: **{open_positions}**\n\n\
         ═══════════════════════════════\n\
         🔬 _Paper trading — no real money_",
-        name, symbol, token_address,
-        amount_sol,
-        quoted_price, effective_price,
-        slippage, price_impact,
-        score,
-        balance_after, open_positions,
     )
 }
 

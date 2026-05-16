@@ -339,8 +339,8 @@ fn estimate_score(pair: &DsPair) -> f64 {
 
     // Healthy market cap (max 10)
     if let Some(mc) = pair.market_cap {
-        score += if mc >= 50_000.0 && mc <= 5_000_000.0 { 10.0 }
-            else if mc >= 10_000.0 && mc <= 20_000_000.0 { 7.0 }
+        score += if (50_000.0..=5_000_000.0).contains(&mc) { 10.0 }
+            else if (10_000.0..=20_000_000.0).contains(&mc) { 7.0 }
             else if mc >= 1_000.0 { 4.0 }
             else { 0.0 };
     } else {
@@ -508,7 +508,7 @@ async fn fetch_recent_tokens(
     // Fetch pair data in batches (DexScreener max 30 tokens per request)
     for chunk in solana_tokens.chunks(30) {
         let addr_str = chunk.join(",");
-        let url = format!("https://api.dexscreener.com/latest/dex/tokens/{}", addr_str);
+        let url = format!("https://api.dexscreener.com/latest/dex/tokens/{addr_str}");
 
         match client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
@@ -617,7 +617,7 @@ fn simulate_on_pairs(
         let mut skip_reason: Option<String> = None;
 
         if score < effective_min_score {
-            let r = format!("Score {:.0} < minimum {:.0}", score, effective_min_score);
+            let r = format!("Score {score:.0} < minimum {effective_min_score:.0}");
             *skip_reasons.entry(r.clone()).or_insert(0) += 1;
             skip_reason = Some(r);
         } else if liq_usd < trading_config.min_liquidity_usd {
@@ -642,7 +642,7 @@ fn simulate_on_pairs(
             continue;
         }
 
-        let score_multiplier = ((score - 75.0) / 25.0).max(0.0).min(1.0);
+        let score_multiplier = ((score - 75.0) / 25.0).clamp(0.0, 1.0);
         // Use configured min_position_sol (not hardcoded 0.05) so backtest matches live trading
         let amount_sol = (score_multiplier * trading_config.max_position_sol)
             .max(trading_config.min_position_sol);
@@ -719,7 +719,7 @@ fn simulate_on_pairs(
         best_trade_symbol: best.map(|t| t.symbol.clone()).unwrap_or_default(),
         worst_trade_pct: worst.map(|t| t.profit_pct).unwrap_or(0.0),
         worst_trade_symbol: worst.map(|t| t.symbol.clone()).unwrap_or_default(),
-        avg_hold_periods: format!("TP:{} SL:{} Trail:{} Hold:{}", tp_count, sl_count, tr_count, hold_count),
+        avg_hold_periods: format!("TP:{tp_count} SL:{sl_count} Trail:{tr_count} Hold:{hold_count}"),
         total_sol_deployed,
         config_tp: trading_config.take_profit_percent,
         config_sl: trading_config.stop_loss_percent,
@@ -785,7 +785,7 @@ pub async fn run_backtest_compare(
 
     let mut scenarios = Vec::new();
     for (name, config) in &scenarios_config {
-        println!("[COMPARE] Running scenario: {}", name);
+        println!("[COMPARE] Running scenario: {name}");
         let result = simulate_on_pairs(&pairs, config, run_time, Some(bt_config.min_score));
         let label = format!("TP{}/SL{}/Trail{}", config.take_profit_percent, config.stop_loss_percent, config.trailing_start_percent);
         scenarios.push(ScenarioResult { name: name.to_string(), label, result });
@@ -834,7 +834,7 @@ pub fn print_backtest_report(result: &BacktestResult) {
         let mut reasons: Vec<_> = result.skip_reasons.iter().collect();
         reasons.sort_by(|a, b| b.1.cmp(a.1));
         for (reason, count) in reasons.iter().take(5) {
-            println!("    • {} × {}", count, reason);
+            println!("    • {count} × {reason}");
         }
     }
 }
@@ -910,7 +910,7 @@ pub fn save_backtest_result(result: &BacktestResult) -> Result<(), Box<dyn std::
     let filename = format!("backtest_{}.json", result.run_time.format("%Y%m%d_%H%M%S"));
     let json = serde_json::to_string_pretty(result)?;
     std::fs::write(&filename, json)?;
-    println!("[BACKTEST] Results saved to {}", filename);
+    println!("[BACKTEST] Results saved to {filename}");
     Ok(())
 }
 
@@ -918,6 +918,6 @@ pub fn save_compare_result(result: &CompareResult) -> Result<(), Box<dyn std::er
     let filename = format!("compare_{}.json", result.run_time.format("%Y%m%d_%H%M%S"));
     let json = serde_json::to_string_pretty(result)?;
     std::fs::write(&filename, json)?;
-    println!("[COMPARE] Results saved to {}", filename);
+    println!("[COMPARE] Results saved to {filename}");
     Ok(())
 }

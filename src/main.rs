@@ -536,7 +536,7 @@ impl HeliusKeyPool {
 
         // Additional keys: HELIUS_API_KEY_2, HELIUS_API_KEY_3, ..., HELIUS_API_KEY_10
         for i in 2..=10 {
-            if let Ok(k) = std::env::var(format!("HELIUS_API_KEY_{}", i)) {
+            if let Ok(k) = std::env::var(format!("HELIUS_API_KEY_{i}")) {
                 let k = k.trim().to_string();
                 if !k.is_empty() && !keys.contains(&k) {
                     keys.push(k);
@@ -559,7 +559,7 @@ impl HeliusKeyPool {
         }
 
         let len = keys.len();
-        println!("[HELIUS] Loaded {} key(s) for rotation", len);
+        println!("[HELIUS] Loaded {len} key(s) for rotation");
         // Each key gets its own 40 req/min bucket — N keys = N × 40 rpm capacity.
         let limiters = (0..len).map(|_| RateLimiter::new(40, 60)).collect();
         Self {
@@ -645,7 +645,7 @@ impl HeliusKeyPool {
                 Some(until) if now >= until => "✅ OK (recovered)".to_string(),
                 Some(until) => {
                     let secs = until.duration_since(now).as_secs();
-                    format!("⏳ Rate-limited ({}s left)", secs)
+                    format!("⏳ Rate-limited ({secs}s left)")
                 }
             };
             format!("{} Key #{}: {} — {}", label, i + 1, self.masked(i), state)
@@ -764,7 +764,7 @@ impl SolanaBot {
                     Some(w)
                 }
                 Err(e) => {
-                    eprintln!("[TRADING] ⚠️ Failed to load wallet: {} — trading disabled", e);
+                    eprintln!("[TRADING] ⚠️ Failed to load wallet: {e} — trading disabled");
                     None
                 }
             }
@@ -917,7 +917,7 @@ impl SolanaBot {
                             self.data.tracked_tokens.len(),
                             self.positions.len());
                     }
-                    Err(e) => println!("⚠️ Failed to parse saved data file: {}", e),
+                    Err(e) => println!("⚠️ Failed to parse saved data file: {e}"),
                 }
             }
             Err(_) => println!("ℹ️ Fresh start — no saved data found"),
@@ -948,8 +948,8 @@ impl SolanaBot {
         let resp = self.client.post(&url).json(&payload).send().await?;
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            println!("[TG SEND] ❌ Failed to send message: {}", err);
-            return Err(format!("Telegram error: {}", err).into());
+            println!("[TG SEND] ❌ Failed to send message: {err}");
+            return Err(format!("Telegram error: {err}").into());
         }
         Ok(())
     }
@@ -974,7 +974,7 @@ impl SolanaBot {
             parse_mode: "Markdown".to_string(),
         };
         if let Err(e) = self.client.post(&url).json(&payload).send().await {
-            println!("❌ Failed to send photo: {}", e);
+            println!("❌ Failed to send photo: {e}");
         }
     }
 
@@ -1010,7 +1010,7 @@ impl SolanaBot {
             },
         };
         if let Err(e) = self.client.post(&url).json(&payload).send().await {
-            println!("❌ Failed to send message with buttons: {}", e);
+            println!("❌ Failed to send message with buttons: {e}");
         }
     }
 
@@ -1046,7 +1046,7 @@ impl SolanaBot {
 
     async fn get_pairs(&mut self, address: &str) -> Vec<PairData> {
         self.dex_limiter.wait_if_needed().await;
-        let url = format!("https://api.dexscreener.com/latest/dex/tokens/{}", address);
+        let url = format!("https://api.dexscreener.com/latest/dex/tokens/{address}");
         match self.client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 match resp.json::<PairResponse>().await {
@@ -1175,7 +1175,7 @@ impl SolanaBot {
 
     async fn test_helius_keys(&self) -> String {
         let count = self.helius_keys.key_count();
-        println!("[HELIUS] Testing {} key(s)...", count);
+        println!("[HELIUS] Testing {count} key(s)...");
         let mut lines = vec![format!("🔑 **Helius Key Test** ({} key(s))\n", count)];
 
         // Use SOL mint as a lightweight test target
@@ -1190,7 +1190,7 @@ impl SolanaBot {
             let active_marker = if i == self.helius_keys.current_index { " ◀ active" } else { "" };
 
             let url = format!(
-                "https://api.helius.xyz/v0/token-metadata?api-key={}", key
+                "https://api.helius.xyz/v0/token-metadata?api-key={key}"
             );
             let body = serde_json::json!({ "mintAccounts": [test_mint] });
 
@@ -1221,9 +1221,7 @@ impl SolanaBot {
         }
 
         if count > 1 {
-            lines.push(format!(
-                "\n💡 Add more keys as `HELIUS_API_KEY_2`, `HELIUS_API_KEY_3`, etc.\nBot auto-rotates on 429."
-            ));
+            lines.push("\n💡 Add more keys as `HELIUS_API_KEY_2`, `HELIUS_API_KEY_3`, etc.\nBot auto-rotates on 429.".to_string());
         } else {
             lines.push(
                 "\n💡 Add more keys as `HELIUS_API_KEY_2`, `HELIUS_API_KEY_3` to enable rotation.".to_string()
@@ -1249,7 +1247,7 @@ impl SolanaBot {
             if let Ok(data) = resp.json::<serde_json::Value>().await {
                 if let Some(price) = data["data"]["SOL"]["price"].as_f64() {
                     if price > 0.0 {
-                        println!("[SOL PRICE] Jupiter: ${:.2}", price);
+                        println!("[SOL PRICE] Jupiter: ${price:.2}");
                         return price;
                     }
                 }
@@ -1266,7 +1264,7 @@ impl SolanaBot {
                 if let Some(price_str) = data["price"].as_str() {
                     if let Ok(price) = price_str.parse::<f64>() {
                         if price > 0.0 {
-                            println!("[SOL PRICE] Binance: ${:.2}", price);
+                            println!("[SOL PRICE] Binance: ${price:.2}");
                             return price;
                         }
                     }
@@ -1283,7 +1281,7 @@ impl SolanaBot {
             if let Ok(data) = resp.json::<serde_json::Value>().await {
                 if let Some(price) = data["solana"]["usd"].as_f64() {
                     if price > 0.0 {
-                        println!("[SOL PRICE] CoinGecko: ${:.2}", price);
+                        println!("[SOL PRICE] CoinGecko: ${price:.2}");
                         return price;
                     }
                 }
@@ -1353,18 +1351,18 @@ impl SolanaBot {
 
         // Flags
         if top10_pct > 50.0 {
-            flags.push(format!("🔴 Top 10 holders: {:.1}% — high concentration", top10_pct));
+            flags.push(format!("🔴 Top 10 holders: {top10_pct:.1}% — high concentration"));
         } else {
-            signals.push(format!("✅ Healthy holder distribution: Top 10 = {:.1}%", top10_pct));
+            signals.push(format!("✅ Healthy holder distribution: Top 10 = {top10_pct:.1}%"));
         }
         if sniper_count > 10 {
-            flags.push(format!("🔴 {} snipers detected", sniper_count));
+            flags.push(format!("🔴 {sniper_count} snipers detected"));
         }
         if bundled {
             flags.push("🔴 Bundled wallets detected".to_string());
         }
         if total_holders > 500 {
-            signals.push(format!("✅ {} active holders", total_holders));
+            signals.push(format!("✅ {total_holders} active holders"));
         }
 
         // Score (max 25)
@@ -1374,7 +1372,7 @@ impl SolanaBot {
         if sniper_count < 5 { score += 5.0; }
         if !bundled { score += 5.0; }
         if total_holders > 200 { score += 5.0; }
-        score = score.max(0.0).min(25.0);
+        score = score.clamp(0.0, 25.0);
 
         HolderAnalysis {
             total_holders,
@@ -1410,11 +1408,11 @@ impl SolanaBot {
         let mut signals = vec![];
 
         if total_usd < 10_000.0 {
-            flags.push(format!("🔴 Low liquidity: ${:.0}", total_usd));
+            flags.push(format!("🔴 Low liquidity: ${total_usd:.0}"));
         } else if total_usd > 100_000.0 {
-            signals.push(format!("✅ Strong liquidity: ${:.0}", total_usd));
+            signals.push(format!("✅ Strong liquidity: ${total_usd:.0}"));
         } else {
-            signals.push(format!("✅ Adequate liquidity: ${:.0}", total_usd));
+            signals.push(format!("✅ Adequate liquidity: ${total_usd:.0}"));
         }
         if lp_burned { signals.push("✅ LP Burned/Locked detected".to_string()); }
 
@@ -1425,7 +1423,7 @@ impl SolanaBot {
         else if total_usd > 10_000.0 { score += 3.0; }
         if lp_burned { score += 5.0; }
         if independent > 2 { score += 5.0; }
-        score = score.max(0.0).min(20.0);
+        score = score.clamp(0.0, 20.0);
 
         LiquidityAnalysis {
             total_usd,
@@ -1476,7 +1474,7 @@ impl SolanaBot {
         let has_distribution = sell_amounts.len() > buy_amounts.len();
 
         if smart_entered >= 3 {
-            signals.push(format!("🐋 {} smart wallets entered!", smart_entered));
+            signals.push(format!("🐋 {smart_entered} smart wallets entered!"));
         }
         if accumulation && !has_distribution {
             signals.push("📈 Clear accumulation pattern — no distribution".to_string());
@@ -1487,7 +1485,7 @@ impl SolanaBot {
         else if smart_entered >= 1 { score += 6.0; }
         if accumulation && !has_distribution { score += 5.0; }
         if has_distribution { score -= 5.0; }
-        score = score.max(0.0).min(20.0);
+        score = score.clamp(0.0, 20.0);
 
         WhaleAnalysis {
             smart_wallets_entered: smart_entered,
@@ -1527,19 +1525,19 @@ impl SolanaBot {
         };
 
         let mut signals = vec![];
-        if m5 > 20.0 { signals.push(format!("⚡ +{:.1}% in 5 minutes!", m5)); }
-        if h1 > 50.0 { signals.push(format!("🚀 +{:.1}% in 1 hour!", h1)); }
+        if m5 > 20.0 { signals.push(format!("⚡ +{m5:.1}% in 5 minutes!")); }
+        if h1 > 50.0 { signals.push(format!("🚀 +{h1:.1}% in 1 hour!")); }
         if buy_ratio > 0.7 { signals.push(format!("📈 Buy pressure: {:.0}% buys", buy_ratio * 100.0)); }
-        if total_txns > 100 { signals.push(format!("🔥 {} transactions/hour", total_txns)); }
+        if total_txns > 100 { signals.push(format!("🔥 {total_txns} transactions/hour")); }
         if let Some(p) = &pattern { signals.push(p.clone()); }
-        if vol24 > 500_000.0 { signals.push(format!("📊 24h volume: ${:.0}", vol24)); }
+        if vol24 > 500_000.0 { signals.push(format!("📊 24h volume: ${vol24:.0}")); }
 
         let mut score = 0.0f64;
         if m5 > 20.0 { score += 3.0; } else if m5 > 10.0 { score += 1.5; }
         if h1 > 50.0 { score += 3.0; } else if h1 > 20.0 { score += 1.5; }
         if buy_ratio > 0.7 { score += 2.0; }
         if total_txns > 100 { score += 2.0; }
-        score = score.max(0.0).min(10.0);
+        score = score.clamp(0.0, 10.0);
 
         TechnicalAnalysis {
             momentum_5m: m5,
@@ -1724,7 +1722,7 @@ impl SolanaBot {
         };
 
         if total < min_score {
-            println!("  ⚪ Score too low: {:.1} < {:.1}", total, min_score);
+            println!("  ⚪ Score too low: {total:.1} < {min_score:.1}");
             return None;
         }
 
@@ -1819,7 +1817,7 @@ impl SolanaBot {
 
         m.push_str("💰 **Market Data:**\n");
         if let Some(price) = a.price_usd {
-            m.push_str(&format!("💵 Price: **${:.8}**\n", price));
+            m.push_str(&format!("💵 Price: **${price:.8}**\n"));
         }
         if let Some(mc) = a.market_cap {
             m.push_str(&format!("🏛️ Market Cap: **{}**\n", format_usd(mc)));
@@ -1836,13 +1834,13 @@ impl SolanaBot {
 
         m.push_str("✅ **Top Signals:**\n");
         for signal in &a.top_signals {
-            m.push_str(&format!("▫️ {}\n", signal));
+            m.push_str(&format!("▫️ {signal}\n"));
         }
 
         if !a.all_red_flags.is_empty() {
             m.push_str("\n⚠️ **Warnings:**\n");
             for flag in a.all_red_flags.iter().take(3) {
-                m.push_str(&format!("▪️ {}\n", flag));
+                m.push_str(&format!("▪️ {flag}\n"));
             }
         }
 
@@ -1850,7 +1848,7 @@ impl SolanaBot {
         if self.trading_config.trading_enabled {
             m.push_str(&format!("\n🤖 **Auto Buy:** {}",
                 if a.total_score >= self.trading_config.min_score_to_buy {
-                    format!("Will buy {:.3} SOL", ((a.total_score - 75.0) / 25.0).max(0.0).min(1.0) * self.trading_config.max_position_sol)
+                    format!("Will buy {:.3} SOL", ((a.total_score - 75.0) / 25.0).clamp(0.0, 1.0) * self.trading_config.max_position_sol)
                 } else {
                     "Does not meet criteria".to_string()
                 }
@@ -1893,7 +1891,7 @@ impl SolanaBot {
             let balance = match self.wallet.as_ref().unwrap().get_sol_balance().await {
                 Ok(b) => b,
                 Err(e) => {
-                    println!("[AUTO BUY] Failed to check balance: {}", e);
+                    println!("[AUTO BUY] Failed to check balance: {e}");
                     return;
                 }
             };
@@ -1909,7 +1907,7 @@ impl SolanaBot {
                 .await
             {
                 Ok(signature) => {
-                    println!("[AUTO BUY] ✅ SUCCESS! TX: {}", signature);
+                    println!("[AUTO BUY] ✅ SUCCESS! TX: {signature}");
 
                     // Compute effective entry price — IDENTICAL formula used by paper trading.
                     // Jupiter fills at quoted × (1 + slippage% + AMM_impact%).
@@ -1962,7 +1960,7 @@ impl SolanaBot {
                     let _ = self.send_message(&msg).await;
                 }
                 Err(e) => {
-                    println!("[AUTO BUY] ❌ FAILED: {}", e);
+                    println!("[AUTO BUY] ❌ FAILED: {e}");
                     let err_msg = format!(
                         "❌ **AUTO BUY FAILED**\nToken: {} ({})\nError: {}\nCheck logs for details.",
                         signal.name, signal.symbol, e
@@ -1993,7 +1991,7 @@ impl SolanaBot {
 
         for addr in &addresses {
             self.dex_limiter.wait_if_needed().await;
-            let url = format!("https://api.dexscreener.com/latest/dex/tokens/{}", addr);
+            let url = format!("https://api.dexscreener.com/latest/dex/tokens/{addr}");
             if let Ok(resp) = self.client.get(&url).send().await {
                 if resp.status().is_success() {
                     if let Ok(pr) = resp.json::<PairResponse>().await {
@@ -2040,7 +2038,7 @@ impl SolanaBot {
                     .await
                 {
                     Ok(signature) => {
-                        println!("[AUTO SELL] ✅ SUCCESS! TX: {}", signature);
+                        println!("[AUTO SELL] ✅ SUCCESS! TX: {signature}");
 
                         // Apply sell-side slippage + AMM price impact + network fee to P&L.
                         // This mirrors paper trading's execute_sell() exactly so that live
@@ -2086,7 +2084,7 @@ impl SolanaBot {
                         // Update position after sell
                         if percentage >= 100.0 {
                             self.positions.remove(&addr);
-                            println!("[AUTO SELL] Position {} removed from active list", symbol);
+                            println!("[AUTO SELL] Position {symbol} removed from active list");
                         } else {
                             // Partial sell — reduce amount and mark TP stage
                             let remaining = 1.0 - percentage / 100.0;
@@ -2108,7 +2106,7 @@ impl SolanaBot {
                         }
                     }
                     Err(e) => {
-                        println!("[AUTO SELL] ❌ FAILED selling {}: {}", symbol, e);
+                        println!("[AUTO SELL] ❌ FAILED selling {symbol}: {e}");
                         let err_msg = format!(
                             "❌ **AUTO SELL FAILED**\n{}\nTrigger: {}\nError: {}",
                             symbol, trigger.description(), e
@@ -2214,10 +2212,10 @@ impl SolanaBot {
 
                     // Auto-save after each buy
                     if let Err(e) = save_paper_state(&self.paper_state) {
-                        println!("[PAPER] Failed to save state: {}", e);
+                        println!("[PAPER] Failed to save state: {e}");
                     }
                 }
-                Err(e) => println!("[PAPER BUY] Skip: {}", e),
+                Err(e) => println!("[PAPER BUY] Skip: {e}"),
             }
         }
     }
@@ -2239,7 +2237,7 @@ impl SolanaBot {
 
         for addr in &addrs {
             self.dex_limiter.wait_if_needed().await;
-            let url = format!("https://api.dexscreener.com/latest/dex/tokens/{}", addr);
+            let url = format!("https://api.dexscreener.com/latest/dex/tokens/{addr}");
             if let Ok(resp) = self.client.get(&url).send().await {
                 if resp.status().is_success() {
                     if let Ok(pr) = resp.json::<PairResponse>().await {
@@ -2290,10 +2288,10 @@ impl SolanaBot {
 
                     // Save after sell
                     if let Err(e) = save_paper_state(&self.paper_state) {
-                        println!("[PAPER] Failed to save state: {}", e);
+                        println!("[PAPER] Failed to save state: {e}");
                     }
                 }
-                Err(e) => println!("[PAPER SELL] Error: {}", e),
+                Err(e) => println!("[PAPER SELL] Error: {e}"),
             }
             sleep(Duration::from_secs(1)).await;
         }
@@ -2404,7 +2402,7 @@ impl SolanaBot {
             Err(e) => {
                 self.tg_poll_failures += 1;
                 if self.tg_poll_failures == 1 {
-                    println!("[TG POLL] Failed to parse Telegram response: {}", e);
+                    println!("[TG POLL] Failed to parse Telegram response: {e}");
                 }
                 return;
             }
@@ -2439,7 +2437,7 @@ impl SolanaBot {
                     continue;
                 }
 
-                println!("[TG CALLBACK] Button pressed: {}", cb_data);
+                println!("[TG CALLBACK] Button pressed: {cb_data}");
                 // Answer immediately to remove Telegram's loading spinner
                 self.answer_callback_query(cb_id).await;
 
@@ -2493,14 +2491,14 @@ impl SolanaBot {
             // Extract command (strip @botname suffix if present)
             let cmd = text.split_whitespace().next().unwrap_or("").split('@').next().unwrap_or("");
             if cmd.starts_with('/') {
-                println!("[TG CMD] Received: {}", cmd);
+                println!("[TG CMD] Received: {cmd}");
             }
 
             match cmd {
                 "/status" => {
                     let msg = self.build_status_message();
                     if let Err(e) = self.send_message(&msg).await {
-                        println!("[TG CMD] Failed to send /status reply: {}", e);
+                        println!("[TG CMD] Failed to send /status reply: {e}");
                     }
                 }
                 "/pause" => {
@@ -2543,7 +2541,7 @@ impl SolanaBot {
                             "⛔ Token `{}` added to blacklist ({} total blocked)",
                             addr, self.data.blacklisted_tokens.len()
                         )).await;
-                        println!("[BLACKLIST] Added & saved: {}", addr);
+                        println!("[BLACKLIST] Added & saved: {addr}");
                     } else {
                         let _ = self.send_message(&format!(
                             "⛔ *Blacklisted tokens:* {}\n\
@@ -2565,7 +2563,7 @@ impl SolanaBot {
         let cb_status = if let Some(until) = self.circuit_breaker_until {
             if until > Instant::now() {
                 let remaining_mins = until.duration_since(Instant::now()).as_secs() / 60;
-                format!("🔴 Circuit breaker ({} min left)", remaining_mins)
+                format!("🔴 Circuit breaker ({remaining_mins} min left)")
             } else {
                 "🟢 Active".to_string()
             }
@@ -2744,7 +2742,7 @@ impl SolanaBot {
             if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 ON" } else { "🔴 OFF" },
         );
         let _ = self.send_message(&msg).await;
-        println!("[DAILY] Report sent for {}", today);
+        println!("[DAILY] Report sent for {today}");
     }
 
     async fn send_weekly_report_if_needed(&mut self) {
@@ -2794,7 +2792,7 @@ impl SolanaBot {
             self.data.seen_tokens.len(), self.data.blacklisted_tokens.len(),
         );
         let _ = self.send_message(&msg).await;
-        println!("[WEEKLY] Report sent for {}", week_key);
+        println!("[WEEKLY] Report sent for {week_key}");
     }
 
     // ============================================================
@@ -2805,7 +2803,7 @@ impl SolanaBot {
         let addresses: Vec<String> = self.data.tracked_tokens.keys().cloned().collect();
         for addr in addresses {
             self.dex_limiter.wait_if_needed().await;
-            let url = format!("https://api.dexscreener.com/latest/dex/tokens/{}", addr);
+            let url = format!("https://api.dexscreener.com/latest/dex/tokens/{addr}");
             let current_price = match self.client.get(&url).send().await {
                 Ok(r) if r.status().is_success() => {
                     r.json::<PairResponse>().await.ok()
@@ -2856,17 +2854,14 @@ impl SolanaBot {
                                 .unwrap_or(Utc::now())
                         ).num_hours();
                     let msg = format!(
-                        "{} **{}!** {}\n═══════════════════════════════\n\n\
-                        💎 Token: **{}** `({})`\n\
-                        📈 Gain: **+{:.1}%**\n\
-                        💰 Discovery Price: **${:.8}**\n\
-                        💰 Current Price: **${:.8}**\n\
-                        ⏰ Since Discovery: **{} hours**\n\n\
+                        "{emoji} **{title}!** {emoji}\n═══════════════════════════════\n\n\
+                        💎 Token: **{token_name}** `({token_symbol})`\n\
+                        📈 Gain: **+{pct:.1}%**\n\
+                        💰 Discovery Price: **${initial_price:.8}**\n\
+                        💰 Current Price: **${price:.8}**\n\
+                        ⏰ Since Discovery: **{hours} hours**\n\n\
                         🎉 **Congrats to all followers!**\n\
-                        🤖 This opportunity was discovered by the bot",
-                        emoji, title, emoji,
-                        token_name, token_symbol,
-                        pct, initial_price, price, hours
+                        🤖 This opportunity was discovered by the bot"
                     );
                     let _ = self.send_message(&msg).await;
 
@@ -2992,7 +2987,7 @@ impl SolanaBot {
                 let mut prices: HashMap<String, f64> = HashMap::new();
                 for addr in self.paper_state.positions.keys() {
                     if let Ok(resp) = self.client
-                        .get(format!("https://api.dexscreener.com/latest/dex/tokens/{}", addr))
+                        .get(format!("https://api.dexscreener.com/latest/dex/tokens/{addr}"))
                         .send().await
                     {
                         if let Ok(pr) = resp.json::<PairResponse>().await {
@@ -3033,7 +3028,7 @@ impl SolanaBot {
                 } else {
                     "manual pause".to_string()
                 };
-                println!("⏸ Buy scanning paused ({}) — sell monitoring active", reason);
+                println!("⏸ Buy scanning paused ({reason}) — sell monitoring active");
                 // Poll Telegram every 3 seconds even while paused
                 let mut waited = 0u64;
                 while waited < SCAN_INTERVAL_SECS {
@@ -3076,7 +3071,7 @@ impl SolanaBot {
             let tokens = match self.get_new_solana_tokens().await {
                 Ok(t) => t,
                 Err(e) => {
-                    println!("❌ Failed to fetch tokens: {}", e);
+                    println!("❌ Failed to fetch tokens: {e}");
                     sleep(Duration::from_secs(SCAN_INTERVAL_SECS)).await;
                     continue;
                 }
@@ -3176,7 +3171,7 @@ impl SolanaBot {
             let save_interval = chrono::Duration::minutes(SAVE_INTERVAL_MINS);
             if Utc::now().signed_duration_since(self.last_save) >= save_interval {
                 if let Err(e) = self.save() {
-                    println!("❌ Failed to save: {}", e);
+                    println!("❌ Failed to save: {e}");
                 }
                 self.last_save = Utc::now();
             }
@@ -3203,7 +3198,7 @@ fn format_usd(amount: f64) -> String {
     } else if amount >= 1_000.0 {
         format!("${:.1}K", amount / 1_000.0)
     } else {
-        format!("${:.2}", amount)
+        format!("${amount:.2}")
     }
 }
 
@@ -3314,7 +3309,7 @@ async fn run_compare_mode() {
         .build()
     {
         Ok(c) => c,
-        Err(e) => { eprintln!("[ERROR] Failed to build HTTP client: {}", e); return; }
+        Err(e) => { eprintln!("[ERROR] Failed to build HTTP client: {e}"); return; }
     };
 
     let base_config = strategy::TradingConfig::from_env();
@@ -3329,14 +3324,14 @@ async fn run_compare_mode() {
 
             // 2. Save to JSON file
             if let Err(e) = backtest::save_compare_result(&result) {
-                eprintln!("[COMPARE] Failed to save result: {}", e);
+                eprintln!("[COMPARE] Failed to save result: {e}");
             }
 
             // 3. Send to Telegram
             if let (Some(token), Some(chat)) = (tg_token, tg_chat) {
                 let msg = backtest::format_compare_telegram(&result);
                 println!("[COMPARE] Sending results to Telegram...");
-                let tg_url = format!("https://api.telegram.org/bot{}/sendMessage", token);
+                let tg_url = format!("https://api.telegram.org/bot{token}/sendMessage");
                 let payload = serde_json::json!({
                     "chat_id": chat,
                     "text": msg,
@@ -3345,7 +3340,7 @@ async fn run_compare_mode() {
                 match client.post(&tg_url).json(&payload).send().await {
                     Ok(r) if r.status().is_success() => println!("[COMPARE] ✅ Report sent to Telegram"),
                     Ok(r) => eprintln!("[COMPARE] Telegram error: {}", r.status()),
-                    Err(e) => eprintln!("[COMPARE] Failed to send to Telegram: {}", e),
+                    Err(e) => eprintln!("[COMPARE] Failed to send to Telegram: {e}"),
                 }
             } else {
                 println!("[COMPARE] Telegram not configured — results only in console and JSON file");
@@ -3359,7 +3354,7 @@ async fn run_compare_mode() {
                 println!("   See compare_*.json for full details.");
             }
         }
-        Err(e) => eprintln!("[COMPARE] ❌ Error: {}", e),
+        Err(e) => eprintln!("[COMPARE] ❌ Error: {e}"),
     }
 }
 
@@ -3376,7 +3371,7 @@ async fn run_backtest_mode() {
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[ERROR] Failed to build HTTP client: {}", e);
+            eprintln!("[ERROR] Failed to build HTTP client: {e}");
             return;
         }
     };
@@ -3395,14 +3390,14 @@ async fn run_backtest_mode() {
 
             // 2. Save to JSON file
             if let Err(e) = backtest::save_backtest_result(&result) {
-                eprintln!("[BACKTEST] Failed to save result: {}", e);
+                eprintln!("[BACKTEST] Failed to save result: {e}");
             }
 
             // 3. Send to Telegram if configured
             if let (Some(token), Some(chat)) = (tg_token, tg_chat) {
                 let msg = backtest::format_backtest_telegram(&result);
                 println!("[BACKTEST] Sending report to Telegram...");
-                let tg_url = format!("https://api.telegram.org/bot{}/sendMessage", token);
+                let tg_url = format!("https://api.telegram.org/bot{token}/sendMessage");
                 let payload = serde_json::json!({
                     "chat_id": chat,
                     "text": msg,
@@ -3411,14 +3406,14 @@ async fn run_backtest_mode() {
                 match client.post(&tg_url).json(&payload).send().await {
                     Ok(r) if r.status().is_success() => println!("[BACKTEST] ✅ Report sent to Telegram"),
                     Ok(r) => eprintln!("[BACKTEST] Telegram error: {}", r.status()),
-                    Err(e) => eprintln!("[BACKTEST] Failed to send to Telegram: {}", e),
+                    Err(e) => eprintln!("[BACKTEST] Failed to send to Telegram: {e}"),
                 }
             } else {
                 println!("[BACKTEST] Telegram not configured — report only in console and JSON file");
             }
         }
         Err(e) => {
-            eprintln!("[BACKTEST] ❌ Error: {}", e);
+            eprintln!("[BACKTEST] ❌ Error: {e}");
         }
     }
 }

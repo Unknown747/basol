@@ -31,15 +31,14 @@ impl SellTrigger {
         match self {
             SellTrigger::PartialTakeProfit { stage, target_pct, profit_pct, sell_pct } =>
                 format!(
-                    "TP{} PARTIAL {:.0}% — profit +{:.1}% (target +{:.1}%)",
-                    stage, sell_pct, profit_pct, target_pct
+                    "TP{stage} PARTIAL {sell_pct:.0}% — profit +{profit_pct:.1}% (target +{target_pct:.1}%)"
                 ),
             SellTrigger::TakeProfit { profit_percent } =>
-                format!("TAKE PROFIT FINAL +{:.1}%", profit_percent),
+                format!("TAKE PROFIT FINAL +{profit_percent:.1}%"),
             SellTrigger::StopLoss { loss_percent } =>
-                format!("STOP LOSS -{:.1}%", loss_percent),
+                format!("STOP LOSS -{loss_percent:.1}%"),
             SellTrigger::TrailingStop { profit_percent } =>
-                format!("TRAILING STOP (profit: +{:.1}%)", profit_percent),
+                format!("TRAILING STOP (profit: +{profit_percent:.1}%)"),
             SellTrigger::TimeExit { hold_minutes, profit_percent } =>
                 format!(
                     "TIME EXIT {} min | P&L: {}{:.1}%",
@@ -92,12 +91,11 @@ pub enum SellDecision {
 /// 6. Time Exit        — idle position, exit to free up capital
 /// 7. Hold             — no active trigger
 ///
-/// **Math notes:**
-/// With 0.05 SOL and 3.81% round-trip break-even:
-/// - TP1 at +12%: net +8.2% (SAFE, above break-even)
-/// - TP2 at +20%: net +16.2% (good)
-/// - Final TP at +35%: net +31.2% (if market is hot)
-/// - SL at -8%: net -11.3% (quick cut, preserves capital)
+/// **Math notes (scalping config, 0.03 SOL, ~3.5% round-trip break-even):**
+/// - TP1 at +8%:  net ~+4.5% (above break-even ✅)
+/// - TP2 at +15%: net ~+11.5% (good)
+/// - Final TP at +25%: net ~+21.5% (strong)
+/// - SL at -6%: net ~-9.5% (quick cut, preserves capital)
 pub fn evaluate_position(
     position: &mut Position,
     current_price: f64,
@@ -232,8 +230,8 @@ pub fn evaluate_position(
     // -------------------------------------------------------
     // 6. TIME EXIT — free up idle capital
     // -------------------------------------------------------
-    if config.max_hold_minutes > 0 && age_minutes >= config.max_hold_minutes as i64 {
-        if profit_pct < config.time_exit_threshold_pct {
+    if config.max_hold_minutes > 0 && age_minutes >= config.max_hold_minutes as i64
+        && profit_pct < config.time_exit_threshold_pct {
             println!(
                 "[SELL EVAL] ⏰ {} - Time exit: {} min | P&L: {:.1}%",
                 position.symbol, age_minutes, profit_pct
@@ -243,7 +241,6 @@ pub fn evaluate_position(
                 trigger: SellTrigger::TimeExit { hold_minutes: age_minutes, profit_percent: profit_pct },
             };
         }
-    }
 
     // -------------------------------------------------------
     // 7. HOLD
@@ -261,7 +258,7 @@ pub fn evaluate_position(
     let time_info = if config.max_hold_minutes > 0 {
         format!(" | Time: {}/{} min", age_minutes, config.max_hold_minutes)
     } else {
-        format!(" | Time: {} min", age_minutes)
+        format!(" | Time: {age_minutes} min")
     };
 
     SellDecision::Hold {
@@ -333,11 +330,11 @@ pub fn format_sell_notification(
     let (status_emoji, sell_percent_line) = match trigger {
         SellTrigger::PartialTakeProfit { stage, sell_pct, .. } => (
             "🎯",
-            format!("📊 Sold: **{:.0}%** of position (stage {}/2)", sell_pct, stage),
+            format!("📊 Sold: **{sell_pct:.0}%** of position (stage {stage}/2)"),
         ),
         _ => {
             let emoji = if profit_pct >= 0.0 { "📈" } else { "📉" };
-            (emoji, format!("📊 Sold: **100%** (full close)"))
+            (emoji, "📊 Sold: **100%** (full close)".to_string())
         }
     };
 
@@ -396,6 +393,7 @@ pub fn format_sell_notification(
 /// Format buy notification — shows both quoted and effective entry price,
 /// slippage, and AMM impact. Mirrors paper trading's buy notification exactly
 /// so you can compare paper vs live side-by-side on Telegram.
+#[allow(clippy::too_many_arguments)]
 pub fn format_buy_notification(
     token_address: &str,
     symbol: &str,
