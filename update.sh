@@ -75,10 +75,18 @@ BEFORE_HASH=$(git rev-parse --short HEAD)
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 info "Current: $BEFORE_HASH on branch $CURRENT_BRANCH"
 
-# Fetch without merging first so we can show what's new
-git fetch --quiet origin main
+# Auto-detect the remote tracking branch (works with master, main, or any name)
+REMOTE_BRANCH=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null \
+    || echo "origin/$CURRENT_BRANCH")
+REMOTE_NAME="${REMOTE_BRANCH%%/*}"   # e.g. "origin"
+BRANCH_NAME="${REMOTE_BRANCH#*/}"   # e.g. "master"
 
-REMOTE_HASH=$(git rev-parse --short origin/main)
+info "Remote: $REMOTE_BRANCH"
+
+# Fetch without merging first so we can show what's new
+git fetch --quiet "$REMOTE_NAME" "$BRANCH_NAME"
+
+REMOTE_HASH=$(git rev-parse --short "$REMOTE_BRANCH")
 
 if [[ "$BEFORE_HASH" == "$REMOTE_HASH" ]]; then
     success "Already up to date ($BEFORE_HASH) — nothing to pull"
@@ -94,7 +102,7 @@ if [[ "$BEFORE_HASH" == "$REMOTE_HASH" ]]; then
     fi
 else
     info "Updates available — pulling ($BEFORE_HASH → $REMOTE_HASH)"
-    git pull --ff-only origin main
+    git pull --ff-only "$REMOTE_NAME" "$BRANCH_NAME"
     AFTER_HASH=$(git rev-parse --short HEAD)
     success "Code updated to $AFTER_HASH"
     echo ""
