@@ -680,6 +680,18 @@ impl RateLimiter {
 }
 
 // ============================================================
+// OFF-PEAK SAVED STATE - for restoring thresholds after off-peak scan
+// ============================================================
+
+struct OffPeakSavedState {
+    min_score: f64,
+    paper_min_score: f64,
+    min_liquidity: f64,
+    max_positions: usize,
+    momentum_max_pct: f64,
+}
+
+// ============================================================
 // MAIN BOT STRUCT - with trading integration
 // ============================================================
 
@@ -720,6 +732,14 @@ struct SolanaBot {
     momentum_max_pct: f64,
     dynamic_min_score: f64,
     last_score_adjust: Instant,
+
+    // === Off-peak trading (stricter filters outside peak hours) ===
+    off_peak_trading_enabled: bool,
+    off_peak_min_score: f64,
+    off_peak_min_liquidity: f64,
+    off_peak_max_positions: u32,
+    off_peak_momentum_max_pct: f64,
+    off_peak_saved: Option<OffPeakSavedState>,
 
     // === Telegram command polling ===
     last_update_id: i64,
@@ -806,6 +826,16 @@ impl SolanaBot {
             .map(|v| v == "true" || v == "1").unwrap_or(false);
         let momentum_max_pct: f64 = std::env::var("MOMENTUM_MAX_PCT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(30.0);
+        let off_peak_trading_enabled: bool = std::env::var("OFF_PEAK_TRADING_ENABLED")
+            .map(|v| v == "true" || v == "1").unwrap_or(false);
+        let off_peak_min_score: f64 = std::env::var("OFF_PEAK_MIN_SCORE")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(93.0);
+        let off_peak_min_liquidity: f64 = std::env::var("OFF_PEAK_MIN_LIQUIDITY")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(25000.0);
+        let off_peak_max_positions: u32 = std::env::var("OFF_PEAK_MAX_POSITIONS")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+        let off_peak_momentum_max_pct: f64 = std::env::var("OFF_PEAK_MOMENTUM_MAX_PCT")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
 
         println!("[FEATURES] Circuit breaker: {} losses → {}h pause | Peak hours: {} | Momentum max: +{:.0}%",
             circuit_breaker_losses, circuit_breaker_pause_hours,
@@ -858,6 +888,13 @@ impl SolanaBot {
             momentum_max_pct,
             dynamic_min_score: base_min_score,
             last_score_adjust: Instant::now(),
+            // Off-peak trading
+            off_peak_trading_enabled,
+            off_peak_min_score,
+            off_peak_min_liquidity,
+            off_peak_max_positions,
+            off_peak_momentum_max_pct,
+            off_peak_saved: None,
             // Telegram command polling
             last_update_id: 0,
             tg_poll_failures: 0,
@@ -2350,6 +2387,39 @@ impl SolanaBot {
         matches!(hour, 13..=16 | 20..=23)
     }
 
+    // Apply stricter off-peak thresholds — saves originals so they can be restored.
+    // Never makes thresholds looser than the current peak-hour values.
+    fn activate_off_peak(&mut self) {
+        self.off_peak_saved = Some(OffPeakSavedState {
+            min_score: self.trading_config.min_score_to_buy,
+            paper_min_score: self.paper_config.min_score_to_buy,
+            min_liquidity: self.trading_config.min_liquidity_usd,
+            max_positions: self.trading_config.max_positions,
+            momentum_max_pct: self.momentum_max_pct,
+        });
+        self.trading_config.min_score_to_buy = self.off_peak_min_score
+            .max(self.trading_config.min_score_to_buy);
+        self.paper_config.min_score_to_buy = self.off_peak_min_score
+            .max(self.paper_config.min_score_to_buy);
+        self.trading_config.min_liquidity_usd = self.off_peak_min_liquidity
+            .max(self.trading_config.min_liquidity_usd);
+        self.trading_config.max_positions = (self.off_peak_max_positions as usize)
+            .min(self.trading_config.max_positions);
+        self.momentum_max_pct = self.off_peak_momentum_max_pct
+            .min(self.momentum_max_pct);
+    }
+
+    // Restore original thresholds after an off-peak scan cycle.
+    fn deactivate_off_peak(&mut self) {
+        if let Some(saved) = self.off_peak_saved.take() {
+            self.trading_config.min_score_to_buy = saved.min_score;
+            self.paper_config.min_score_to_buy = saved.paper_min_score;
+            self.trading_config.min_liquidity_usd = saved.min_liquidity;
+            self.trading_config.max_positions = saved.max_positions;
+            self.momentum_max_pct = saved.momentum_max_pct;
+        }
+    }
+
     // ============================================================
     // TELEGRAM COMMAND POLLING
     // ============================================================
@@ -2599,7 +2669,13 @@ impl SolanaBot {
             self.sol_price_usd,
             self.dynamic_min_score,
             self.consecutive_losses, self.circuit_breaker_losses,
-            if self.peak_hours_only { "ON" } else { "OFF" },
+            if self.peak_hours_only {
+                if self.off_peak_trading_enabled {
+                    "ON + off-peak STRICT"
+                } else {
+                    "ON"
+                }
+            } else { "OFF" },
             self.paper_state.current_balance_sol,
             self.paper_state.positions.len(),
             self.paper_state.win_rate(),
@@ -3044,16 +3120,28 @@ impl SolanaBot {
             // PEAK HOURS FILTER — skip buying outside high-volume windows
             // -------------------------------------------------------
             if self.peak_hours_only && !Self::is_peak_hours() {
-                println!("🌙 Off-peak hours ({:02}:00 UTC) — buy scan skipped", Utc::now().hour());
-                // Poll Telegram every 3 seconds even during off-peak
-                let mut waited = 0u64;
-                while waited < SCAN_INTERVAL_SECS {
-                    let tick = 3u64.min(SCAN_INTERVAL_SECS - waited);
-                    sleep(Duration::from_secs(tick)).await;
-                    self.poll_telegram_commands().await;
-                    waited += tick;
+                if !self.off_peak_trading_enabled {
+                    println!("🌙 Off-peak hours ({:02}:00 UTC) — buy scan skipped", Utc::now().hour());
+                    // Poll Telegram every 3 seconds even during off-peak
+                    let mut waited = 0u64;
+                    while waited < SCAN_INTERVAL_SECS {
+                        let tick = 3u64.min(SCAN_INTERVAL_SECS - waited);
+                        sleep(Duration::from_secs(tick)).await;
+                        self.poll_telegram_commands().await;
+                        waited += tick;
+                    }
+                    continue;
                 }
-                continue;
+                // Off-peak trading enabled — scan but with stricter thresholds
+                println!(
+                    "🌙 Off-peak ({:02}:00 UTC) — STRICT mode: score≥{:.0} liq≥${:.0} max {}pos momentum<{:.0}%",
+                    Utc::now().hour(),
+                    self.off_peak_min_score,
+                    self.off_peak_min_liquidity,
+                    self.off_peak_max_positions,
+                    self.off_peak_momentum_max_pct,
+                );
+                self.activate_off_peak();
             }
 
             scan_count += 1;
@@ -3176,6 +3264,9 @@ impl SolanaBot {
                 self.last_save = Utc::now();
             }
 
+            // Restore normal thresholds if off-peak overrides were applied this cycle
+            self.deactivate_off_peak();
+
             // Wait for next scan — poll Telegram every 3 seconds so commands respond fast
             let mut waited = 0u64;
             while waited < SCAN_INTERVAL_SECS {
@@ -3241,6 +3332,13 @@ async fn main() {
         println!("  CIRCUIT_BREAKER_PAUSE_HOURS=2  Pause duration in hours");
         println!("  PEAK_HOURS_ONLY=false        Only buy during 13-17 & 20-00 UTC");
         println!("  MOMENTUM_MAX_PCT=30.0        Skip tokens already up >N% in 1h");
+        println!();
+        println!("ENVIRONMENT VARIABLES (off-peak trading — stricter filters outside peak hours):");
+        println!("  OFF_PEAK_TRADING_ENABLED=false  Allow trading outside peak hours with strict filters");
+        println!("  OFF_PEAK_MIN_SCORE=93.0         Minimum score required off-peak (vs normal peak score)");
+        println!("  OFF_PEAK_MIN_LIQUIDITY=25000.0  Minimum liquidity USD off-peak");
+        println!("  OFF_PEAK_MAX_POSITIONS=1        Max open positions allowed off-peak");
+        println!("  OFF_PEAK_MOMENTUM_MAX_PCT=10.0  Stricter momentum filter off-peak");
         println!();
         println!("TELEGRAM COMMANDS: /status /pause /resume /trades /score /blacklist");
         println!();
