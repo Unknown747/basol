@@ -28,8 +28,8 @@ pub struct BacktestConfig {
     /// Override for the score threshold used during backtesting.
     /// Backtest scoring (estimate_score) has a max of ~90 because it cannot
     /// call Helius (no on-chain data for security/holder checks). Using the
-    /// live MIN_SCORE_TO_BUY (89) directly would cause almost zero tokens to
-    /// qualify. Set BACKTEST_MIN_SCORE to a lower equivalent (default: 65).
+    /// live MIN_SCORE_TO_BUY (85) directly would cause almost zero tokens to
+    /// qualify. Set BACKTEST_MIN_SCORE to a lower equivalent (default: 62).
     pub min_score: f64,
 }
 
@@ -51,7 +51,7 @@ impl BacktestConfig {
             telegram_token: std::env::var("TELEGRAM_BOT_TOKEN").ok(),
             telegram_chat: std::env::var("TELEGRAM_CHAT_ID").ok(),
             min_score: std::env::var("BACKTEST_MIN_SCORE")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(65.0),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(62.0),
         }
     }
 }

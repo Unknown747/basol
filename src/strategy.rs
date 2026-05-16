@@ -181,7 +181,7 @@ pub struct TradingConfig {
 
     // === 3-STAGE TAKE PROFIT ===
     /// TP1 level — sell tp1_sell_percent% of position here
-    /// Must be > break-even (~3.81% for 0.05 SOL with 1.5% slippage)
+    /// Must be > break-even (~3.5% for 0.03 SOL with 1.5% slippage)
     /// Set 0.0 to disable 3-stage and use single TP only
     pub tp1_percent: f64,
     /// Percentage of position to sell at TP1 (e.g. 33.0 = one third)
@@ -199,24 +199,25 @@ impl TradingConfig {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
+        // Defaults match config.env scalping preset (used only if config.env is missing)
         let max_position_sol = std::env::var("MAX_POSITION_SOL")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.03);
 
         let min_position_sol: f64 = std::env::var("MIN_POSITION_SOL")
             .ok().and_then(|v| v.parse().ok())
-            .unwrap_or((max_position_sol * 0.1_f64).max(0.01_f64));
+            .unwrap_or(0.03);
 
         let take_profit_percent = std::env::var("TAKE_PROFIT_PERCENT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(40.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(25.0);
 
         let stop_loss_percent = std::env::var("STOP_LOSS_PERCENT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(15.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(6.0);
 
         let trailing_start_percent = std::env::var("TRAILING_START_PERCENT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(20.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(16.0);
 
         let trailing_distance_percent = std::env::var("TRAILING_DISTANCE_PERCENT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(3.0);
 
         let min_score_to_buy = std::env::var("MIN_SCORE_TO_BUY")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(85.0);
@@ -225,24 +226,24 @@ impl TradingConfig {
             .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0);
 
         let default_slippage = std::env::var("DEFAULT_SLIPPAGE")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(1.5);
 
         let max_positions = std::env::var("MAX_POSITIONS")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(5);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(2);
 
         let max_hold_minutes = std::env::var("MAX_HOLD_MINUTES")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0u64);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(25u64);
 
         let time_exit_threshold_pct = std::env::var("TIME_EXIT_THRESHOLD_PCT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(1.5);
 
-        // 3-stage TP — default 0.0 = disabled (use single TP)
+        // 3-stage TP — defaults match scalping config (TP1=8%, TP2=15%)
         let tp1_percent = std::env::var("TP1_PERCENT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(8.0);
         let tp1_sell_percent = std::env::var("TP1_SELL_PERCENT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(33.0);
         let tp2_percent = std::env::var("TP2_PERCENT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(15.0);
         let tp2_sell_percent = std::env::var("TP2_SELL_PERCENT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(50.0);
 

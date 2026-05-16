@@ -36,31 +36,32 @@ pub struct PaperConfig {
 
 impl PaperConfig {
     pub fn from_env() -> Self {
+        // Defaults match config.env scalping preset (used only if config.env is missing)
         Self {
             enabled: std::env::var("PAPER_TRADING_ENABLED")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
             virtual_balance_sol: std::env::var("PAPER_BALANCE_SOL")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(10.0),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(0.1),
             max_position_sol: std::env::var("MAX_POSITION_SOL")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(0.5),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(0.03),
             take_profit_percent: std::env::var("TAKE_PROFIT_PERCENT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(40.0),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(25.0),
             stop_loss_percent: std::env::var("STOP_LOSS_PERCENT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(15.0),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(6.0),
             trailing_start_percent: std::env::var("TRAILING_START_PERCENT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(20.0),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(16.0),
             trailing_distance_percent: std::env::var("TRAILING_DISTANCE_PERCENT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(3.0),
             min_score_to_buy: std::env::var("MIN_SCORE_TO_BUY")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(85.0),
             min_liquidity_usd: std::env::var("MIN_LIQUIDITY_USD")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0),
-            // Default slippage matches live trading configuration
+            // Slippage matches live trading (1.5% default)
             default_slippage: std::env::var("DEFAULT_SLIPPAGE")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(1.5),
             max_positions: std::env::var("MAX_POSITIONS")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(5),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(2),
             report_interval_secs: std::env::var("PAPER_REPORT_INTERVAL_SECS")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(3600),
         }
