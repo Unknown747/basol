@@ -539,14 +539,18 @@ impl PaperTradingState {
                     if new_stop > pos.trailing_stop_price {
                         pos.trailing_stop_price = new_stop;
                     }
-                    if current_price <= pos.trailing_stop_price {
-                        to_sell.push((
-                            addr.clone(),
-                            format!("Trailing Stop (profit: +{:.1}%)", profit_pct),
-                            current_price, 100.0, 0,
-                        ));
-                        continue;
-                    }
+                }
+                // Check hit OUTSIDE if/else — matches live evaluate_position() which calls
+                // is_trailing_stop_hit() after both the activation AND update branches.
+                // Previous code only checked inside the else branch, causing a one-cycle
+                // (60s) delay on the first activation vs live trading.
+                if current_price <= pos.trailing_stop_price {
+                    to_sell.push((
+                        addr.clone(),
+                        format!("Trailing Stop (profit: +{:.1}%)", profit_pct),
+                        current_price, 100.0, 0,
+                    ));
+                    continue;
                 }
             }
 

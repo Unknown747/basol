@@ -49,6 +49,12 @@ struct SwapRequest {
     dynamic_compute_unit_limit: bool,
     #[serde(rename = "prioritizationFeeLamports")]
     prioritization_fee_lamports: String,
+    /// Force Jupiter to return a legacy (non-versioned) transaction.
+    /// Jupiter V6 defaults to versioned transactions (v0), whose wire format
+    /// differs from legacy — the sign_and_send_transaction code parses legacy
+    /// format, so this flag is required for correct on-chain signing.
+    #[serde(rename = "asLegacyTransaction")]
+    as_legacy_transaction: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -347,6 +353,7 @@ impl WalletManager {
             auto_slippage: false,
             dynamic_compute_unit_limit: true,
             prioritization_fee_lamports: "auto".to_string(),
+            as_legacy_transaction: true,
         };
 
         let resp = self.client

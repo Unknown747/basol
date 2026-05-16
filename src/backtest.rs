@@ -25,6 +25,12 @@ pub struct BacktestConfig {
     pub sol_price_usd: f64,
     pub telegram_token: Option<String>,
     pub telegram_chat: Option<String>,
+    /// Override for the score threshold used during backtesting.
+    /// Backtest scoring (estimate_score) has a max of ~90 because it cannot
+    /// call Helius (no on-chain data for security/holder checks). Using the
+    /// live MIN_SCORE_TO_BUY (89) directly would cause almost zero tokens to
+    /// qualify. Set BACKTEST_MIN_SCORE to a lower equivalent (default: 65).
+    pub min_score: f64,
 }
 
 impl BacktestConfig {
@@ -44,6 +50,8 @@ impl BacktestConfig {
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(170.0),
             telegram_token: std::env::var("TELEGRAM_BOT_TOKEN").ok(),
             telegram_chat: std::env::var("TELEGRAM_CHAT_ID").ok(),
+            min_score: std::env::var("BACKTEST_MIN_SCORE")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(65.0),
         }
     }
 }
@@ -545,10 +553,14 @@ async fn fetch_recent_tokens(
 // INNER SIMULATION - Run on already-fetched data
 // ============================================================
 
+// score_threshold_override: overrides trading_config.min_score_to_buy for backtest.
+// Backtest estimate_score() max is ~90 (no Helius data for security/holders),
+// so using the live threshold (89) would qualify almost nothing.
 fn simulate_on_pairs(
     pairs: &[DsPair],
     trading_config: &TradingConfig,
     run_time: DateTime<Utc>,
+    score_threshold_override: Option<f64>,
 ) -> BacktestResult {
     let now_ms = Utc::now().timestamp_millis();
     let mut trades: Vec<BacktestTrade> = Vec::new();
@@ -601,10 +613,11 @@ fn simulate_on_pairs(
             else                      { timeline.at_5m_ago };
 
         let score = estimate_score(pair);
+        let effective_min_score = score_threshold_override.unwrap_or(trading_config.min_score_to_buy);
         let mut skip_reason: Option<String> = None;
 
-        if score < trading_config.min_score_to_buy {
-            let r = format!("Score {:.0} < minimum {:.0}", score, trading_config.min_score_to_buy);
+        if score < effective_min_score {
+            let r = format!("Score {:.0} < minimum {:.0}", score, effective_min_score);
             *skip_reasons.entry(r.clone()).or_insert(0) += 1;
             skip_reason = Some(r);
         } else if liq_usd < trading_config.min_liquidity_usd {
@@ -729,7 +742,11 @@ pub async fn run_backtest(
 ) -> Result<BacktestResult> {
     let run_time = Utc::now();
     let pairs = fetch_recent_tokens(client, bt_config).await?;
-    Ok(simulate_on_pairs(&pairs, trading_config, run_time))
+    println!(
+        "[BACKTEST] Score threshold: {:.0} (live: {:.0}, backtest override: BACKTEST_MIN_SCORE)",
+        bt_config.min_score, trading_config.min_score_to_buy
+    );
+    Ok(simulate_on_pairs(&pairs, trading_config, run_time, Some(bt_config.min_score)))
 }
 
 // ============================================================
@@ -769,7 +786,7 @@ pub async fn run_backtest_compare(
     let mut scenarios = Vec::new();
     for (name, config) in &scenarios_config {
         println!("[COMPARE] Running scenario: {}", name);
-        let result = simulate_on_pairs(&pairs, config, run_time);
+        let result = simulate_on_pairs(&pairs, config, run_time, Some(bt_config.min_score));
         let label = format!("TP{}/SL{}/Trail{}", config.take_profit_percent, config.stop_loss_percent, config.trailing_start_percent);
         scenarios.push(ScenarioResult { name: name.to_string(), label, result });
     }
