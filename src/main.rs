@@ -254,6 +254,9 @@ struct TechnicalAnalysis {
 struct ContractSecurity {
     mint_authority_revoked: bool,
     freeze_authority_revoked: bool,
+    /// true  = Helius returned data we could parse
+    /// false = Helius call failed / token not yet indexed
+    metadata_available: bool,
     transfer_fee_percent: f64,
     honeypot_risk: bool,
     score: f64,
@@ -1049,9 +1052,12 @@ impl SolanaBot {
                 if !resp.status().is_success() { return None; }
                 let arr: Vec<serde_json::Value> = resp.json().await.ok()?;
                 let item = arr.into_iter().next()?;
-                let _on_chain = item.get("onChainMetadata")?
-                    .get("metadata")?
-                    .get("tokenStandard");
+                // NOTE: Do NOT gate on onChainMetadata/tokenStandard here.
+                // Many new SPL memecoins are not yet indexed by Helius as Metaplex
+                // tokens, so requiring that field would cause the function to return
+                // None for virtually every new token — blocking all buys silently.
+                // The mint/freeze authority fields live in account.data.parsed.info
+                // and are available independently of Metaplex metadata status.
                 let mint_auth = item.get("account")
                     .and_then(|a| a.get("data"))
                     .and_then(|d| d.get("parsed"))
@@ -1506,34 +1512,46 @@ impl SolanaBot {
 
     async fn analyze_contract_security(&mut self, address: &str) -> ContractSecurity {
         let meta = self.get_token_metadata(address).await;
+        let meta_available = meta.is_some();
         let mut flags = vec![];
         let mut signals = vec![];
 
+        // When Helius metadata is unavailable (API error, token not yet indexed),
+        // we treat authorities as "unknown — assume revoked" rather than "confirmed
+        // not revoked". This prevents silently blocking every new token that Helius
+        // hasn't indexed as a Metaplex token yet.
+        // Security score credit is only awarded when the data is confirmed by Helius.
         let mint_revoked = meta.as_ref()
             .map(|m| m.mint_authority.is_none())
-            .unwrap_or(false);
+            .unwrap_or(true); // optimistic when API data unavailable
         let freeze_revoked = meta.as_ref()
             .map(|m| m.freeze_authority.is_none())
-            .unwrap_or(false);
+            .unwrap_or(true); // optimistic when API data unavailable
 
-        if !mint_revoked {
+        if !meta_available {
+            flags.push("⚠️ Security data unavailable — Helius not indexed yet".to_string());
+        } else if !mint_revoked {
             flags.push("🔴 Mint authority NOT revoked — risk of new token minting".to_string());
         } else {
             signals.push("✅ Mint authority revoked".to_string());
         }
-        if !freeze_revoked {
+
+        if meta_available && !freeze_revoked {
             flags.push("⚠️ Freeze authority active — wallets can be frozen".to_string());
-        } else {
+        } else if meta_available {
             signals.push("✅ Freeze authority revoked".to_string());
         }
 
+        // Score credit only when Helius CONFIRMED the authority is revoked.
+        // Unknown (not indexed) = 0 pts — keeps borderline tokens below buy threshold.
         let mut score = 0.0f64;
-        if mint_revoked { score += 6.0; }
-        if freeze_revoked { score += 4.0; }
+        if meta_available && mint_revoked   { score += 6.0; }
+        if meta_available && freeze_revoked { score += 4.0; }
 
         ContractSecurity {
             mint_authority_revoked: mint_revoked,
             freeze_authority_revoked: freeze_revoked,
+            metadata_available: meta_available,
             transfer_fee_percent: 0.0,
             honeypot_risk: false,
             score,
@@ -1637,8 +1655,12 @@ impl SolanaBot {
         let technical = self.analyze_technicals(&pairs);
         let security  = self.analyze_contract_security(addr).await;
 
-        if !security.mint_authority_revoked {
-            println!("  ⏭ Skip — mint authority not revoked");
+        // Hard-block only when Helius CONFIRMED mint authority exists.
+        // If metadata was unavailable (not indexed), mint_authority_revoked is
+        // optimistically true — the token goes through to scoring but earns 0
+        // security points (max score 90 instead of 100), keeping the bar high.
+        if security.metadata_available && !security.mint_authority_revoked {
+            println!("  ⏭ Skip — mint authority confirmed NOT revoked (Helius verified)");
             return None;
         }
 
