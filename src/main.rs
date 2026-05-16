@@ -3308,7 +3308,7 @@ async fn run_compare_mode() {
 
             // 4. Best configuration suggestion
             println!();
-            println!("💡 TIP: To apply the best strategy to the main bot, add to .env:");
+            println!("💡 TIP: To apply the best strategy to the main bot, edit config.env:");
             if let Some(winner) = result.scenarios.first() {
                 let parts: Vec<&str> = winner.label.split('/').collect();
                 for part in &parts {

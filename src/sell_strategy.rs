@@ -204,13 +204,18 @@ pub fn evaluate_position(
 
     // -------------------------------------------------------
     // 5. FINAL TP — sell all remaining if price keeps pumping.
-    //    - If 3-stage active (tp1/tp2 configured): only fires after TP2
-    //    - If 3-stage disabled (tp1_percent=0): acts as single TP
+    //    - TP1 disabled (tp1=0)          → single TP, always eligible
+    //    - TP1 enabled, TP2 disabled (tp2=0) → eligible after TP1 fired
+    //    - TP1+TP2 enabled               → eligible after TP2 fired (3-stage)
     // -------------------------------------------------------
     let tp3_eligible = if config.tp1_percent > 0.0 {
-        position.tp2_fired // 3-stage mode: must have already hit TP2
+        if config.tp2_percent > 0.0 {
+            position.tp2_fired // full 3-stage: require both TP1 and TP2 first
+        } else {
+            position.tp1_fired // TP1-only: just need TP1 fired before final TP
+        }
     } else {
-        true // single TP mode
+        true // single TP mode: no partial stages configured
     };
 
     if tp3_eligible && profit_pct >= config.take_profit_percent {

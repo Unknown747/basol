@@ -346,10 +346,12 @@ impl PaperTradingState {
         let sold_sol    = pos_amount_sol * percentage / 100.0;
         let sold_tokens = pos_tokens     * percentage / 100.0;
 
-        // Price impact from the portion being sold
+        // Price impact from the portion being sold — constant product AMM formula:
+        // impact = trade_usd / (pool_usd + trade_usd). Selling into the pool
+        // pushes the price down, so we calculate the fraction of pool displaced.
         let sell_value_usd = sold_tokens * quoted_sell_price;
         let sell_impact_pct = if liquidity > 0.0 {
-            (sell_value_usd / liquidity * 50.0).min(30.0)
+            (sell_value_usd / (liquidity + sell_value_usd) * 100.0).min(30.0)
         } else { 0.0 };
 
         let total_cost_pct      = slippage_percent + sell_impact_pct;
@@ -544,7 +546,12 @@ impl PaperTradingState {
             }
 
             // 5. FINAL TP — sell all remaining
-            let tp3_eligible = if tp1_pct > 0.0 { pos.tp2_fired } else { true };
+            // TP1 disabled → always eligible (single TP)
+            // TP1 enabled, TP2 disabled → eligible after TP1 fired
+            // TP1+TP2 enabled → eligible after TP2 fired (full 3-stage)
+            let tp3_eligible = if tp1_pct > 0.0 {
+                if tp2_pct > 0.0 { pos.tp2_fired } else { pos.tp1_fired }
+            } else { true };
             if tp3_eligible && profit_pct >= take_profit {
                 to_sell.push((
                     addr.clone(),
