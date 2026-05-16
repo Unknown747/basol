@@ -397,6 +397,9 @@ struct PositionData {
     trailing_stop_price: f64,
     entry_time: DateTime<Utc>,
     score_at_entry: f64,
+    // Pool liquidity at entry — used for sell-side price impact calculation
+    #[serde(default)]
+    liquidity_at_entry: f64,
     // Persisted TP state — prevents TP1/TP2 from re-firing after a bot restart
     #[serde(default)]
     tp1_fired: bool,
@@ -418,6 +421,7 @@ impl From<&Position> for PositionData {
             trailing_stop_price: p.trailing_stop_price,
             entry_time: p.entry_time,
             score_at_entry: p.score_at_entry,
+            liquidity_at_entry: p.liquidity_at_entry,
             tp1_fired: p.tp1_fired,
             tp2_fired: p.tp2_fired,
         }
@@ -438,6 +442,7 @@ impl From<PositionData> for Position {
             trailing_stop_price: d.trailing_stop_price,
             entry_time: d.entry_time,
             score_at_entry: d.score_at_entry,
+            liquidity_at_entry: d.liquidity_at_entry,
             tp1_fired: d.tp1_fired,
             tp2_fired: d.tp2_fired,
         }
@@ -1932,6 +1937,7 @@ impl SolanaBot {
                         amount_sol,
                         token_amount,
                         signal.total_score,
+                        signal.liquidity_usd,
                     );
                     self.positions.insert(signal.token_address.clone(), position);
                     self.data.performance_stats.total_buys += 1;
@@ -2032,15 +2038,24 @@ impl SolanaBot {
                     Ok(signature) => {
                         println!("[AUTO SELL] ✅ SUCCESS! TX: {}", signature);
 
-                        // Apply sell-side slippage + network fee to P&L stats.
-                        // Use only the sold portion (percentage%), not the full position —
-                        // partial sells (TP1/TP2) only realise a fraction of the position.
+                        // Apply sell-side slippage + AMM price impact + network fee to P&L.
+                        // This mirrors paper trading's execute_sell() exactly so that live
+                        // P&L accounting is consistent with simulation results.
+                        let sold_sol = amount_sol * percentage / 100.0;
+                        let slippage = self.trading_config.default_slippage;
+                        let liquidity_usd = if let Some(p) = self.positions.get(&addr) {
+                            p.liquidity_at_entry
+                        } else { 0.0 };
+                        // Price impact uses the USD value of tokens being sold vs pool depth
+                        let sell_value_usd = sold_sol * self.sol_price_usd;
+                        let sell_impact_pct = if liquidity_usd > 0.0 {
+                            (sell_value_usd / (liquidity_usd + sell_value_usd) * 100.0).min(30.0)
+                        } else { 0.0 };
                         let effective_sell_price = current_price
-                            * (1.0 - self.trading_config.default_slippage / 100.0);
+                            * (1.0 - (slippage + sell_impact_pct) / 100.0);
                         let profit_pct = if buy_price > 0.0 {
                             (effective_sell_price - buy_price) / buy_price * 100.0
                         } else { 0.0 };
-                        let sold_sol = amount_sol * percentage / 100.0;
                         // Deduct sell network fee from proceeds (paper does the same)
                         let profit_sol =
                             sold_sol * profit_pct / 100.0 - strategy::NETWORK_FEE_SOL;
@@ -2130,6 +2145,7 @@ impl SolanaBot {
                 (k.clone(), Position::new(
                     v.token_address.clone(), v.symbol.clone(), v.name.clone(),
                     v.buy_price_usd, v.amount_sol, v.token_amount, v.score_at_entry,
+                    v.liquidity_at_entry,
                 ))
             })
             .collect();

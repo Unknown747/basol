@@ -370,12 +370,15 @@ impl PaperTradingState {
         self.current_balance_sol += net_proceeds;
         self.total_sells += 1;
 
+        // Only count win/loss on full position close (tp_stage == 0).
+        // Partial sells (TP1=1, TP2=2) must NOT increment these counters, otherwise
+        // a single 3-stage exit would inflate the win rate by counting 2-3 times.
         let result = if profit_pct > 0.5 {
-            self.winning_trades += 1;
+            if tp_stage == 0 { self.winning_trades += 1; }
             self.total_profit_sol += profit_sol.max(0.0);
             TradeResult::Profit
         } else if profit_pct < -0.5 {
-            self.losing_trades += 1;
+            if tp_stage == 0 { self.losing_trades += 1; }
             self.total_loss_sol += profit_sol.abs();
             TradeResult::Loss
         } else {
@@ -524,10 +527,12 @@ impl PaperTradingState {
             if profit_pct >= trailing_start {
                 if !pos.trailing_stop_active {
                     pos.trailing_stop_active = true;
-                    pos.trailing_stop_price  = current_price * (1.0 - trailing_distance / 100.0);
+                    // Use highest_price (not current_price) — identical to live trading
+                    // activate_trailing_stop() in positions.rs which anchors to the peak.
+                    pos.trailing_stop_price  = pos.highest_price * (1.0 - trailing_distance / 100.0);
                     println!(
-                        "[PAPER TRAILING] {} - Active at ${:.8} | Profit: +{:.1}%",
-                        pos.symbol, pos.trailing_stop_price, profit_pct
+                        "[PAPER TRAILING] {} - Active at ${:.8} | Peak: ${:.8} | Profit: +{:.1}%",
+                        pos.symbol, pos.trailing_stop_price, pos.highest_price, profit_pct
                     );
                 } else {
                     let new_stop = current_price * (1.0 - trailing_distance / 100.0);

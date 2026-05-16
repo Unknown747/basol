@@ -20,6 +20,8 @@ pub struct Position {
     pub trailing_stop_price: f64,
     pub entry_time: DateTime<Utc>,
     pub score_at_entry: f64,
+    /// Pool liquidity at entry in USD — used for sell-side price impact calculation
+    pub liquidity_at_entry: f64,
 
     // === 3-STAGE TAKE PROFIT ===
     /// Partial sold at TP1?
@@ -37,6 +39,7 @@ impl Position {
         amount_in_sol: f64,
         token_amount: f64,
         score_at_entry: f64,
+        liquidity_at_entry: f64,
     ) -> Self {
         Self {
             token_address,
@@ -50,6 +53,7 @@ impl Position {
             trailing_stop_price: 0.0,
             entry_time: Utc::now(),
             score_at_entry,
+            liquidity_at_entry,
             tp1_fired: false,
             tp2_fired: false,
         }

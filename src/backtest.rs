@@ -363,6 +363,10 @@ fn simulate_exit(
     let sl = config.stop_loss_percent;
     let trail_start = config.trailing_start_percent;
     let trail_dist = config.trailing_distance_percent;
+    let tp1 = config.tp1_percent;
+    let tp1_sell = config.tp1_sell_percent;   // % of position sold at TP1
+    let tp2 = config.tp2_percent;
+    let tp2_sell = config.tp2_sell_percent;   // % of remainder sold at TP2
 
     // Simulate price sequence from entry
     let checkpoints = [
@@ -376,28 +380,55 @@ fn simulate_exit(
     let mut trailing_active = false;
     let mut trailing_stop = 0.0;
 
+    // 3-stage TP state — mirrors paper_trading evaluate_positions logic exactly
+    let mut tp1_fired = false;
+    let mut tp2_fired = false;
+
+    // Weighted average exit price accumulator for partial sells
+    // weight = fraction of original position sold at that price
+    let mut weighted_price_sum = 0.0_f64;
+    let mut weight_total = 0.0_f64;
+
     for &price in &checkpoints {
         let pct = (price - entry_price) / entry_price * 100.0;
 
-        // Update trailing
         if price > highest {
             highest = price;
         }
 
-        // Check take profit
-        if pct >= tp {
-            return (price, ExitReason::TakeProfit);
+        // --- TP1 PARTIAL ---
+        if tp1 > 0.0 && !tp1_fired && pct >= tp1 {
+            tp1_fired = true;
+            let frac = tp1_sell / 100.0;
+            weighted_price_sum += price * frac;
+            weight_total += frac;
+            // Continue evaluating rest of position
         }
 
-        // Check stop loss
+        // --- TP2 PARTIAL ---
+        if tp2 > 0.0 && tp1_fired && !tp2_fired && pct >= tp2 {
+            tp2_fired = true;
+            // TP2 sells tp2_sell% of the *remainder* after TP1
+            let remaining_frac = 1.0 - weight_total;
+            let frac = remaining_frac * tp2_sell / 100.0;
+            weighted_price_sum += price * frac;
+            weight_total += frac;
+        }
+
+        // --- STOP LOSS (full close of remaining) ---
         if pct <= -sl {
-            return (price, ExitReason::StopLoss);
+            let remaining = (1.0 - weight_total).max(0.0);
+            weighted_price_sum += price * remaining;
+            weight_total += remaining;
+            let avg = if weight_total > 0.0 { weighted_price_sum / weight_total } else { price };
+            return (avg, ExitReason::StopLoss);
         }
 
-        // Trailing stop logic
+        // --- TRAILING STOP ---
         if pct >= trail_start {
             if !trailing_active {
                 trailing_active = true;
+                // Anchor to highest_price — matches live and paper trading exactly
                 trailing_stop = highest * (1.0 - trail_dist / 100.0);
             } else {
                 let new_stop = highest * (1.0 - trail_dist / 100.0);
@@ -406,14 +437,36 @@ fn simulate_exit(
                 }
             }
         }
-
         if trailing_active && price <= trailing_stop {
-            return (price, ExitReason::TrailingStop);
+            let remaining = (1.0 - weight_total).max(0.0);
+            weighted_price_sum += price * remaining;
+            weight_total += remaining;
+            let avg = if weight_total > 0.0 { weighted_price_sum / weight_total } else { price };
+            return (avg, ExitReason::TrailingStop);
+        }
+
+        // --- FINAL TP (full close of remaining) ---
+        // TP1 disabled → always eligible; TP1+TP2 → must fire both first
+        let tp_final_eligible = if tp1 > 0.0 {
+            if tp2 > 0.0 { tp2_fired } else { tp1_fired }
+        } else { true };
+        if tp_final_eligible && pct >= tp {
+            let remaining = (1.0 - weight_total).max(0.0);
+            weighted_price_sum += price * remaining;
+            weight_total += remaining;
+            let avg = if weight_total > 0.0 { weighted_price_sum / weight_total } else { price };
+            return (avg, ExitReason::TakeProfit);
         }
     }
 
-    // Hold to end of data
-    (timeline.current, ExitReason::HoldToEnd)
+    // Hold to end of data — close any remaining position at current price
+    let remaining = (1.0 - weight_total).max(0.0);
+    if remaining > 0.0 {
+        weighted_price_sum += timeline.current * remaining;
+        weight_total += remaining;
+    }
+    let avg = if weight_total > 0.0 { weighted_price_sum / weight_total } else { timeline.current };
+    (avg, ExitReason::HoldToEnd)
 }
 
 // ============================================================
