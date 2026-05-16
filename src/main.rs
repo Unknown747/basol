@@ -510,6 +510,9 @@ struct HeliusKeyPool {
     keys: Vec<String>,
     current_index: usize,
     rate_limited_until: Vec<Option<Instant>>,
+    // Per-key rate limiter — each key gets its own 40 req/min bucket so
+    // multiple keys give proportionally higher throughput (N keys × 40 rpm).
+    limiters: Vec<RateLimiter>,
 }
 
 impl HeliusKeyPool {
@@ -550,15 +553,23 @@ impl HeliusKeyPool {
 
         let len = keys.len();
         println!("[HELIUS] Loaded {} key(s) for rotation", len);
+        // Each key gets its own 40 req/min bucket — N keys = N × 40 rpm capacity.
+        let limiters = (0..len).map(|_| RateLimiter::new(40, 60)).collect();
         Self {
             keys,
             current_index: 0,
             rate_limited_until: vec![None; len],
+            limiters,
         }
     }
 
     fn current(&self) -> &str {
         &self.keys[self.current_index]
+    }
+
+    // Throttle requests for the active key only — respects its own 40 rpm budget.
+    async fn wait_for_current(&mut self) {
+        self.limiters[self.current_index].wait_if_needed().await;
     }
 
     fn key_count(&self) -> usize {
@@ -669,7 +680,6 @@ struct SolanaBot {
     client: Client,
     data: BotPersistentData,
     dex_limiter: RateLimiter,
-    helius_limiter: RateLimiter,
     tg_limiter: RateLimiter,
     last_save: DateTime<Utc>,
     is_paused: bool,
@@ -813,7 +823,6 @@ impl SolanaBot {
                 blacklisted_tokens: HashSet::new(),
             },
             dex_limiter: RateLimiter::new(55, 60),
-            helius_limiter: RateLimiter::new(40, 60),
             tg_limiter: RateLimiter::new(20, 60),
             last_save: Utc::now(),
             is_paused: false,
@@ -1050,92 +1059,106 @@ impl SolanaBot {
     // ============================================================
 
     async fn get_token_metadata(&mut self, address: &str) -> Option<HeliusTokenInfo> {
-        self.helius_limiter.wait_if_needed().await;
-        let url = format!(
-            "https://api.helius.xyz/v0/token-metadata?api-key={}", self.helius_keys.current()
-        );
-        let body = serde_json::json!({ "mintAccounts": [address] });
-        match self.client.post(&url).json(&body).send().await {
-            Ok(resp) => {
-                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    self.helius_keys.rotate_on_rate_limit();
-                    return None;
+        // Retry once after rotation: if the active key is rate-limited we immediately
+        // switch to the next available key and try again — no data dropped on 429.
+        let mut retried = false;
+        loop {
+            self.helius_keys.wait_for_current().await;
+            let url = format!(
+                "https://api.helius.xyz/v0/token-metadata?api-key={}", self.helius_keys.current()
+            );
+            let body = serde_json::json!({ "mintAccounts": [address] });
+            match self.client.post(&url).json(&body).send().await {
+                Ok(resp) => {
+                    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        self.helius_keys.rotate_on_rate_limit();
+                        if !retried { retried = true; continue; }
+                        return None; // all keys exhausted
+                    }
+                    if !resp.status().is_success() { return None; }
+                    let arr: Vec<serde_json::Value> = resp.json().await.ok()?;
+                    let item = arr.into_iter().next()?;
+                    // NOTE: Do NOT gate on onChainMetadata/tokenStandard here.
+                    // Many new SPL memecoins are not yet indexed by Helius as Metaplex
+                    // tokens, so requiring that field would cause the function to return
+                    // None for virtually every new token — blocking all buys silently.
+                    // The mint/freeze authority fields live in account.data.parsed.info
+                    // and are available independently of Metaplex metadata status.
+                    let mint_auth = item.get("account")
+                        .and_then(|a| a.get("data"))
+                        .and_then(|d| d.get("parsed"))
+                        .and_then(|p| p.get("info"))
+                        .and_then(|i| i.get("mintAuthority"))
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string());
+                    let freeze_auth = item.get("account")
+                        .and_then(|a| a.get("data"))
+                        .and_then(|d| d.get("parsed"))
+                        .and_then(|p| p.get("info"))
+                        .and_then(|i| i.get("freezeAuthority"))
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string());
+                    return Some(HeliusTokenInfo {
+                        mint_authority: mint_auth,
+                        freeze_authority: freeze_auth,
+                        decimals: None,
+                        supply: None,
+                    });
                 }
-                if !resp.status().is_success() { return None; }
-                let arr: Vec<serde_json::Value> = resp.json().await.ok()?;
-                let item = arr.into_iter().next()?;
-                // NOTE: Do NOT gate on onChainMetadata/tokenStandard here.
-                // Many new SPL memecoins are not yet indexed by Helius as Metaplex
-                // tokens, so requiring that field would cause the function to return
-                // None for virtually every new token — blocking all buys silently.
-                // The mint/freeze authority fields live in account.data.parsed.info
-                // and are available independently of Metaplex metadata status.
-                let mint_auth = item.get("account")
-                    .and_then(|a| a.get("data"))
-                    .and_then(|d| d.get("parsed"))
-                    .and_then(|p| p.get("info"))
-                    .and_then(|i| i.get("mintAuthority"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string());
-                let freeze_auth = item.get("account")
-                    .and_then(|a| a.get("data"))
-                    .and_then(|d| d.get("parsed"))
-                    .and_then(|p| p.get("info"))
-                    .and_then(|i| i.get("freezeAuthority"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string());
-                Some(HeliusTokenInfo {
-                    mint_authority: mint_auth,
-                    freeze_authority: freeze_auth,
-                    decimals: None,
-                    supply: None,
-                })
+                _ => return None,
             }
-            _ => None,
         }
     }
 
     async fn get_token_holders(&mut self, address: &str) -> Vec<HeliusTokenHolder> {
-        self.helius_limiter.wait_if_needed().await;
-        let url = format!(
-            "https://api.helius.xyz/v1/token-holders?api-key={}&mint={}&limit=50",
-            self.helius_keys.current(), address
-        );
-        match self.client.get(&url).send().await {
-            Ok(resp) => {
-                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    self.helius_keys.rotate_on_rate_limit();
-                    return vec![];
+        let mut retried = false;
+        loop {
+            self.helius_keys.wait_for_current().await;
+            let url = format!(
+                "https://api.helius.xyz/v1/token-holders?api-key={}&mint={}&limit=50",
+                self.helius_keys.current(), address
+            );
+            match self.client.get(&url).send().await {
+                Ok(resp) => {
+                    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        self.helius_keys.rotate_on_rate_limit();
+                        if !retried { retried = true; continue; }
+                        return vec![];
+                    }
+                    return if resp.status().is_success() {
+                        resp.json::<Vec<HeliusTokenHolder>>().await.unwrap_or_default()
+                    } else {
+                        vec![]
+                    };
                 }
-                if resp.status().is_success() {
-                    resp.json::<Vec<HeliusTokenHolder>>().await.unwrap_or_default()
-                } else {
-                    vec![]
-                }
+                _ => return vec![],
             }
-            _ => vec![],
         }
     }
 
     async fn get_token_transactions(&mut self, address: &str) -> Vec<HeliusTransaction> {
-        self.helius_limiter.wait_if_needed().await;
-        let url = format!(
-            "https://api.helius.xyz/v0/addresses/{}/transactions?api-key={}&type=SWAP&limit=100",
-            address, self.helius_keys.current()
-        );
-        match self.client.get(&url).send().await {
-            Ok(resp) => {
-                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    self.helius_keys.rotate_on_rate_limit();
-                    return vec![];
+        let mut retried = false;
+        loop {
+            self.helius_keys.wait_for_current().await;
+            let url = format!(
+                "https://api.helius.xyz/v0/addresses/{}/transactions?api-key={}&type=SWAP&limit=100",
+                address, self.helius_keys.current()
+            );
+            match self.client.get(&url).send().await {
+                Ok(resp) => {
+                    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        self.helius_keys.rotate_on_rate_limit();
+                        if !retried { retried = true; continue; }
+                        return vec![];
+                    }
+                    return if resp.status().is_success() {
+                        resp.json::<Vec<HeliusTransaction>>().await.unwrap_or_default()
+                    } else {
+                        vec![]
+                    };
                 }
-                if resp.status().is_success() {
-                    resp.json::<Vec<HeliusTransaction>>().await.unwrap_or_default()
-                } else {
-                    vec![]
-                }
+                _ => return vec![],
             }
-            _ => vec![],
         }
     }
 
