@@ -3181,8 +3181,8 @@ impl SolanaBot {
                 );
             }
 
-            // Analyze new tokens
-            for token in new_tokens.iter().take(10) {
+            // Analyze new tokens — up to 20 per scan to avoid missing candidates
+            for token in new_tokens.iter().take(20) {
                 if self.data.daily_alert_count >= MAX_DAILY_ALERTS {
                     println!("⚠️ Daily alert limit reached ({}/{})", self.data.daily_alert_count, MAX_DAILY_ALERTS);
                     break;
