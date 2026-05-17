@@ -1728,7 +1728,8 @@ impl SolanaBot {
         }
 
         let liquidity = self.analyze_liquidity(&pairs);
-        if liquidity.total_usd < 5000.0 {
+        // Use configured threshold — respects MIN_LIQUIDITY_USD and off-peak override
+        if liquidity.total_usd < self.trading_config.min_liquidity_usd {
             println!("  ⏭ Skip — liquidity too low");
             return None;
         }
@@ -1927,8 +1928,14 @@ impl SolanaBot {
         if let BuyDecision::Buy { amount_sol, reason, .. } = decision {
             println!("[AUTO BUY] Executing buy {} — {:.4} SOL | {}", signal.symbol, amount_sol, reason);
 
+            // Guard: wallet must be configured (WALLET_PRIVATE_KEY set)
+            let Some(ref wallet) = self.wallet else {
+                println!("[AUTO BUY] No wallet configured — set WALLET_PRIVATE_KEY to enable live trading");
+                return;
+            };
+
             // Check wallet balance
-            let balance = match self.wallet.as_ref().unwrap().get_sol_balance().await {
+            let balance = match wallet.get_sol_balance().await {
                 Ok(b) => b,
                 Err(e) => {
                     println!("[AUTO BUY] Failed to check balance: {e}");
@@ -1942,7 +1949,7 @@ impl SolanaBot {
             }
 
             // Execute buy
-            match self.wallet.as_ref().unwrap()
+            match wallet
                 .buy_token(&signal.token_address, amount_sol, self.trading_config.default_slippage)
                 .await
             {
@@ -2073,7 +2080,11 @@ impl SolanaBot {
                     symbol, percentage, trigger.description()
                 );
 
-                match self.wallet.as_ref().unwrap()
+                let Some(ref wallet) = self.wallet else {
+                    println!("[AUTO SELL] No wallet configured — skipping live sell");
+                    continue;
+                };
+                match wallet
                     .sell_token(&addr, percentage, self.trading_config.default_slippage)
                     .await
                 {
@@ -2896,7 +2907,7 @@ impl SolanaBot {
 
             if let Some(price) = current_price {
                 let (initial_price, current_milestones, token_name, token_symbol) = {
-                    let token = self.data.tracked_tokens.get_mut(&addr).unwrap();
+                    let Some(token) = self.data.tracked_tokens.get_mut(&addr) else { continue };
                     if price > token.highest_price { token.highest_price = price; }
                     (
                         token.initial_price,
@@ -3101,22 +3112,16 @@ impl SolanaBot {
                 .map(|u| u > Instant::now())
                 .unwrap_or(false);
 
-            if self.is_paused || circuit_broken {
+            // When paused or circuit-broken: skip LIVE buy only.
+            // Paper trading continues scanning so simulation stays accurate.
+            let live_buy_blocked = self.is_paused || circuit_broken;
+            if live_buy_blocked {
                 let reason = if circuit_broken {
                     format!("circuit breaker ({} consec. losses)", self.consecutive_losses)
                 } else {
                     "manual pause".to_string()
                 };
-                println!("⏸ Buy scanning paused ({reason}) — sell monitoring active");
-                // Poll Telegram every 3 seconds even while paused
-                let mut waited = 0u64;
-                while waited < SCAN_INTERVAL_SECS {
-                    let tick = 3u64.min(SCAN_INTERVAL_SECS - waited);
-                    sleep(Duration::from_secs(tick)).await;
-                    self.poll_telegram_commands().await;
-                    waited += tick;
-                }
-                continue;
+                println!("⏸ Live buy paused ({reason}) — paper trading + sell monitoring still active");
             }
 
             // -------------------------------------------------------
@@ -3174,19 +3179,17 @@ impl SolanaBot {
 
             println!("📊 {} new tokens found for analysis", new_tokens.len());
 
-            for token in &new_tokens {
+            // Analyze new tokens — up to 20 per scan.
+            // Tokens beyond take(20) stay unseen and will be retried next scan.
+            // Tokens that ARE analyzed (pass or fail) get marked seen immediately
+            // to avoid re-analysis on the next cycle.
+            for token in new_tokens.iter().take(20) {
+                // Mark as seen before analysis so transient failures don't cause
+                // infinite retry loops; tokens beyond take(20) are NOT marked here.
                 self.data.seen_tokens.insert(
                     token.token_address.clone(),
                     Utc::now().to_rfc3339(),
                 );
-            }
-
-            // Analyze new tokens — up to 20 per scan to avoid missing candidates
-            for token in new_tokens.iter().take(20) {
-                if self.data.daily_alert_count >= MAX_DAILY_ALERTS {
-                    println!("⚠️ Daily alert limit reached ({}/{})", self.data.daily_alert_count, MAX_DAILY_ALERTS);
-                    break;
-                }
 
                 print!("🔬 Analyzing {} ({})... ",
                     token.name.as_deref().unwrap_or("?"),
@@ -3196,15 +3199,23 @@ impl SolanaBot {
                 if let Some(analysis) = self.full_analyze(token).await {
                     println!("✅ Score: {:.1}/100", analysis.total_score);
 
-                    // Send Telegram alert
-                    let msg = self.format_alert(&analysis);
-                    let dex_url = analysis.dex_urls.first().cloned().unwrap_or_default();
-                    self.send_alert_with_buttons(&msg, &dex_url).await;
+                    // Telegram alert — gated by daily limit.
+                    // Trading (live + paper) continues regardless of alert quota.
+                    if self.data.daily_alert_count < MAX_DAILY_ALERTS {
+                        let msg = self.format_alert(&analysis);
+                        let dex_url = analysis.dex_urls.first().cloned().unwrap_or_default();
+                        self.send_alert_with_buttons(&msg, &dex_url).await;
 
-                    // Send image if available
-                    if let Some(img) = &analysis.image_url {
-                        let caption = format!("{} ({}) - Score: {:.1}/100", analysis.name, analysis.symbol, analysis.total_score);
-                        self.send_photo(img, &caption).await;
+                        // Send image if available
+                        if let Some(img) = &analysis.image_url {
+                            let caption = format!("{} ({}) - Score: {:.1}/100", analysis.name, analysis.symbol, analysis.total_score);
+                            self.send_photo(img, &caption).await;
+                        }
+
+                        self.data.daily_alert_count += 1;
+                        self.data.performance_stats.total_alerts_sent += 1;
+                    } else {
+                        println!("⚠️ Daily Telegram limit ({MAX_DAILY_ALERTS}) reached — alert skipped, trade eval continues");
                     }
 
                     // Profit tracking
@@ -3226,16 +3237,15 @@ impl SolanaBot {
                         }
                     }
 
-                    self.data.daily_alert_count += 1;
-                    self.data.performance_stats.total_alerts_sent += 1;
+                    // -----------------------------------------------
+                    // AUTO BUY (live) - skip if paused/circuit broken
+                    // -----------------------------------------------
+                    if !live_buy_blocked {
+                        self.check_and_buy(&analysis).await;
+                    }
 
                     // -----------------------------------------------
-                    // AUTO BUY (live) - check if we should buy
-                    // -----------------------------------------------
-                    self.check_and_buy(&analysis).await;
-
-                    // -----------------------------------------------
-                    // PAPER BUY (simulation) - run in parallel
+                    // PAPER BUY - always runs, even when live is paused
                     // -----------------------------------------------
                     self.check_and_paper_buy(&analysis).await;
 
