@@ -689,6 +689,7 @@ struct OffPeakSavedState {
     paper_min_score: f64,
     min_liquidity: f64,
     max_positions: usize,
+    paper_max_positions: usize,
     momentum_max_pct: f64,
 }
 
@@ -1644,7 +1645,7 @@ impl SolanaBot {
 
     fn analyze_social(&self, token: &DexToken) -> SocialAnalysis {
         let desc = token.description.as_deref().unwrap_or("");
-        let has_twitter = desc.contains("twitter") || desc.contains("x.com") || desc.contains("t.me");
+        let has_twitter = desc.contains("twitter") || desc.contains("x.com");
         let has_telegram = desc.contains("t.me") || desc.contains("telegram");
         let social_hype = if has_twitter && has_telegram { 70.0 }
             else if has_twitter || has_telegram { 40.0 }
@@ -2409,6 +2410,7 @@ impl SolanaBot {
             paper_min_score: self.paper_config.min_score_to_buy,
             min_liquidity: self.trading_config.min_liquidity_usd,
             max_positions: self.trading_config.max_positions,
+            paper_max_positions: self.paper_config.max_positions,
             momentum_max_pct: self.momentum_max_pct,
         });
         self.trading_config.min_score_to_buy = self.off_peak_min_score
@@ -2419,6 +2421,9 @@ impl SolanaBot {
             .max(self.trading_config.min_liquidity_usd);
         self.trading_config.max_positions = (self.off_peak_max_positions as usize)
             .min(self.trading_config.max_positions);
+        // Mirror position limit to paper config so paper/live use identical constraints
+        self.paper_config.max_positions = (self.off_peak_max_positions as usize)
+            .min(self.paper_config.max_positions);
         self.momentum_max_pct = self.off_peak_momentum_max_pct
             .min(self.momentum_max_pct);
     }
@@ -2430,6 +2435,7 @@ impl SolanaBot {
             self.paper_config.min_score_to_buy = saved.paper_min_score;
             self.trading_config.min_liquidity_usd = saved.min_liquidity;
             self.trading_config.max_positions = saved.max_positions;
+            self.paper_config.max_positions = saved.paper_max_positions;
             self.momentum_max_pct = saved.momentum_max_pct;
         }
     }
@@ -3337,19 +3343,19 @@ async fn main() {
         println!("  TRADING_ENABLED=false        Master switch for live trading");
         println!("  PAPER_TRADING_ENABLED=false  Simulated trading without real money");
         println!("  PAPER_BALANCE_SOL=0.1        Virtual paper trading balance");
-        println!("  MIN_SCORE_TO_BUY=89.0        Minimum token score to trigger buy");
+        println!("  MIN_SCORE_TO_BUY=65.0        Minimum token score to trigger buy");
         println!("  MAX_POSITION_SOL=0.03        Max SOL per position");
         println!();
         println!("ENVIRONMENT VARIABLES (protection — v3.0):");
-        println!("  CIRCUIT_BREAKER_LOSSES=3     Pause buying after N consecutive losses");
-        println!("  CIRCUIT_BREAKER_PAUSE_HOURS=2  Pause duration in hours");
+        println!("  CIRCUIT_BREAKER_LOSSES=4     Pause buying after N consecutive losses");
+        println!("  CIRCUIT_BREAKER_PAUSE_HOURS=1  Pause duration in hours");
         println!("  PEAK_HOURS_ONLY=false        Only buy during 13-17 & 20-00 UTC");
         println!("  MOMENTUM_MAX_PCT=30.0        Skip tokens already up >N% in 1h");
         println!();
         println!("ENVIRONMENT VARIABLES (off-peak trading — stricter filters outside peak hours):");
-        println!("  OFF_PEAK_TRADING_ENABLED=false  Allow trading outside peak hours with strict filters");
-        println!("  OFF_PEAK_MIN_SCORE=93.0         Minimum score required off-peak (vs normal peak score)");
-        println!("  OFF_PEAK_MIN_LIQUIDITY=25000.0  Minimum liquidity USD off-peak");
+        println!("  OFF_PEAK_TRADING_ENABLED=true   Allow trading outside peak hours with strict filters");
+        println!("  OFF_PEAK_MIN_SCORE=75.0         Minimum score required off-peak (vs normal peak score)");
+        println!("  OFF_PEAK_MIN_LIQUIDITY=15000.0  Minimum liquidity USD off-peak");
         println!("  OFF_PEAK_MAX_POSITIONS=1        Max open positions allowed off-peak");
         println!("  OFF_PEAK_MOMENTUM_MAX_PCT=10.0  Stricter momentum filter off-peak");
         println!();
@@ -3382,13 +3388,13 @@ async fn main() {
     println!("Config from environment:");
     println!("  TRADING_ENABLED       = {}", std::env::var("TRADING_ENABLED").unwrap_or("false".to_string()));
     println!("  PAPER_TRADING_ENABLED = {}", std::env::var("PAPER_TRADING_ENABLED").unwrap_or("false".to_string()));
-    println!("  MAX_POSITION_SOL      = {}", std::env::var("MAX_POSITION_SOL").unwrap_or("0.5".to_string()));
-    println!("  TAKE_PROFIT_PERCENT   = {}", std::env::var("TAKE_PROFIT_PERCENT").unwrap_or("40.0".to_string()));
-    println!("  STOP_LOSS_PERCENT     = {}", std::env::var("STOP_LOSS_PERCENT").unwrap_or("15.0".to_string()));
+    println!("  MAX_POSITION_SOL      = {}", std::env::var("MAX_POSITION_SOL").unwrap_or("0.03".to_string()));
+    println!("  TAKE_PROFIT_PERCENT   = {}", std::env::var("TAKE_PROFIT_PERCENT").unwrap_or("25.0".to_string()));
+    println!("  STOP_LOSS_PERCENT     = {}", std::env::var("STOP_LOSS_PERCENT").unwrap_or("6.0".to_string()));
     println!("  WALLET_PRIVATE_KEY    = {}", if std::env::var("WALLET_PRIVATE_KEY").is_ok() { "✅ SET" } else { "❌ NOT SET" });
     println!("── Protection (v3.0) ──────────────────────");
-    println!("  CIRCUIT_BREAKER_LOSSES= {}", std::env::var("CIRCUIT_BREAKER_LOSSES").unwrap_or("3".to_string()));
-    println!("  CIRCUIT_BREAKER_PAUSE = {}h", std::env::var("CIRCUIT_BREAKER_PAUSE_HOURS").unwrap_or("2".to_string()));
+    println!("  CIRCUIT_BREAKER_LOSSES= {}", std::env::var("CIRCUIT_BREAKER_LOSSES").unwrap_or("4".to_string()));
+    println!("  CIRCUIT_BREAKER_PAUSE = {}h", std::env::var("CIRCUIT_BREAKER_PAUSE_HOURS").unwrap_or("1".to_string()));
     println!("  PEAK_HOURS_ONLY       = {}", std::env::var("PEAK_HOURS_ONLY").unwrap_or("false".to_string()));
     println!("  MOMENTUM_MAX_PCT      = {}%", std::env::var("MOMENTUM_MAX_PCT").unwrap_or("30.0".to_string()));
     println!("══════════════════════════════════════════");
