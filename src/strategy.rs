@@ -219,7 +219,7 @@ impl TradingConfig {
             .ok().and_then(|v| v.parse().ok()).unwrap_or(25.0);
 
         let stop_loss_percent = std::env::var("STOP_LOSS_PERCENT")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(6.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
 
         let trailing_start_percent = std::env::var("TRAILING_START_PERCENT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(16.0);
@@ -228,7 +228,7 @@ impl TradingConfig {
             .ok().and_then(|v| v.parse().ok()).unwrap_or(3.0);
 
         let min_score_to_buy = std::env::var("MIN_SCORE_TO_BUY")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(85.0);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(45.0);
 
         let min_liquidity_usd = std::env::var("MIN_LIQUIDITY_USD")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0);

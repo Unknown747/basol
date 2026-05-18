@@ -7,13 +7,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// ============================================================
-// MAINNET CONSTANTS - identical to real transaction costs
-// ============================================================
-
-/// Solana network fee per transaction (base fee 5000 lamports + priority fee ~20000 lamports)
-/// Total ~25000 lamports = 0.000025 SOL per tx — conservative/realistic figure
-pub const NETWORK_FEE_SOL: f64 = 0.000025;
+// Import the single authoritative fee constant — paper and live must share the same value.
+// Defining it twice risks silent divergence if one copy is updated without the other.
+use crate::strategy::NETWORK_FEE_SOL;
 
 // ============================================================
 // CONFIG
@@ -23,10 +19,8 @@ pub struct PaperConfig {
     pub enabled: bool,
     pub virtual_balance_sol: f64,
     pub max_position_sol: f64,
-    pub take_profit_percent: f64,
-    pub stop_loss_percent: f64,
-    pub trailing_start_percent: f64,
-    pub trailing_distance_percent: f64,
+    // TP/SL/trailing thresholds intentionally removed — check_and_paper_sell reads
+    // those directly from trading_config so paper and live always share one source.
     pub min_score_to_buy: f64,
     pub min_liquidity_usd: f64,
     pub default_slippage: f64,
@@ -45,16 +39,8 @@ impl PaperConfig {
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(0.1),
             max_position_sol: std::env::var("MAX_POSITION_SOL")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(0.03),
-            take_profit_percent: std::env::var("TAKE_PROFIT_PERCENT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(25.0),
-            stop_loss_percent: std::env::var("STOP_LOSS_PERCENT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(6.0),
-            trailing_start_percent: std::env::var("TRAILING_START_PERCENT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(16.0),
-            trailing_distance_percent: std::env::var("TRAILING_DISTANCE_PERCENT")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(3.0),
             min_score_to_buy: std::env::var("MIN_SCORE_TO_BUY")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(85.0),
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(45.0),
             min_liquidity_usd: std::env::var("MIN_LIQUIDITY_USD")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(10_000.0),
             // Slippage matches live trading (1.5% default)
@@ -225,11 +211,11 @@ impl PaperTradingState {
         if liquidity_usd <= 0.0 || sol_price_usd <= 0.0 {
             return 0.0;
         }
-        // SOL reserve on pool side ≈ half of total liquidity (assuming 50/50 pool)
-        let sol_reserve = liquidity_usd / 2.0 / sol_price_usd;
-        // AMM formula: impact = amount_in / (reserve_in + amount_in)
-        let impact = amount_sol / (sol_reserve + amount_sol);
-        // Cap at 50% to avoid unrealistic values
+        // AMM formula: impact = trade_usd / (pool_usd + trade_usd)
+        // Matches compute_fee_analysis() in strategy.rs exactly — both paper and live
+        // use total pool liquidity (not half), ensuring identical impact estimates.
+        let trade_usd = amount_sol * sol_price_usd;
+        let impact = trade_usd / (liquidity_usd + trade_usd);
         (impact * 100.0).min(50.0)
     }
 
@@ -359,11 +345,14 @@ impl PaperTradingState {
         let profit_pct = if buy_price > 0.0 {
             (effective_sell_price - buy_price) / buy_price * 100.0
         } else { 0.0 };
-        let profit_sol = sold_sol * profit_pct / 100.0;
+        // Deduct network fee from profit — matches live sell accounting in main.rs exactly.
+        // The stored profit_sol is net-of-fee so handle_trade_result(), total_profit_sol
+        // stats, and Telegram notifications all show the same number as live trading.
+        let gross_profit_sol = sold_sol * profit_pct / 100.0;
+        let profit_sol       = gross_profit_sol - NETWORK_FEE_SOL;
 
-        // Proceeds = (capital of sold portion + profit) - network fee
-        let gross_proceeds = sold_sol + profit_sol;
-        let net_proceeds   = (gross_proceeds - NETWORK_FEE_SOL).max(0.0);
+        // Proceeds = capital of sold portion + gross profit - fee
+        let net_proceeds = (sold_sol + gross_profit_sol - NETWORK_FEE_SOL).max(0.0);
 
         self.current_balance_sol += net_proceeds;
         self.total_sells += 1;

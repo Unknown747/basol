@@ -853,7 +853,7 @@ impl SolanaBot {
         let circuit_breaker_losses: u32 = std::env::var("CIRCUIT_BREAKER_LOSSES")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(3);
         let circuit_breaker_pause_hours: u64 = std::env::var("CIRCUIT_BREAKER_PAUSE_HOURS")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(1);
         let peak_hours_only: bool = std::env::var("PEAK_HOURS_ONLY")
             .map(|v| v == "true" || v == "1").unwrap_or(false);
         let momentum_max_pct: f64 = std::env::var("MOMENTUM_MAX_PCT")
@@ -2402,13 +2402,14 @@ impl SolanaBot {
             }
         }
 
-        // Evaluate TP/SL/Trailing — supports 3-stage TP
+        // Evaluate TP/SL/Trailing — all params from trading_config so paper sell
+        // uses exactly the same thresholds as live evaluate_position() in sell_strategy.rs.
         let to_sell = self.paper_state.evaluate_positions(
             &prices,
-            self.paper_config.take_profit_percent,
-            self.paper_config.stop_loss_percent,
-            self.paper_config.trailing_start_percent,
-            self.paper_config.trailing_distance_percent,
+            self.trading_config.take_profit_percent,
+            self.trading_config.stop_loss_percent,
+            self.trading_config.trailing_start_percent,
+            self.trading_config.trailing_distance_percent,
             self.trading_config.tp1_percent,
             self.trading_config.tp1_sell_percent,
             self.trading_config.tp2_percent,
@@ -2490,8 +2491,13 @@ impl SolanaBot {
 
         if is_loss {
             self.daily_loss_sol += profit_sol.abs();
+            // Daily loss % is relative to the configured capital base.
+            // PAPER_BALANCE_SOL must equal the actual live trading capital so that
+            // daily limit protects real money proportionally (see config.env).
+            // For live-only mode (paper disabled), set PAPER_BALANCE_SOL to your
+            // wallet balance — the bot does not auto-read on-chain balance.
             let initial_bal = self.paper_state.initial_balance_sol
-                .max(self.trading_config.max_position_sol); // safe fallback
+                .max(self.trading_config.max_position_sol * self.trading_config.max_positions as f64); // safe floor
             let daily_loss_pct = self.daily_loss_sol / initial_bal * 100.0;
             let daily_limit_pct = self.trading_config.daily_max_loss_pct;
 
@@ -2963,7 +2969,10 @@ impl SolanaBot {
             return; // Need at least 5 trades to make a meaningful adjustment
         }
 
-        // Use last 20 trades for rolling win rate
+        // Use last 20 paper trades for rolling win rate.
+        // NOTE: if paper trading is disabled (PAPER_TRADING_ENABLED=false), closed_trades
+        // is always empty and this function never adjusts the score. In live-only mode,
+        // set PAPER_TRADING_ENABLED=true to enable score auto-adjustment.
         let recent: Vec<_> = self.paper_state.closed_trades.iter().rev().take(20).collect();
         let wins = recent.iter().filter(|t| t.profit_percent > 0.0).count();
         let win_rate = wins as f64 / recent.len() as f64 * 100.0;

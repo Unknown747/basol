@@ -121,6 +121,33 @@ install.sh         — one-click install untuk Ubuntu VPS (systemd)
 - Selalu fee-aware — tidak ada target profit yang mengabaikan biaya transaksi
 - `MIN_SCORE_TO_BUY=45` — threshold realistis untuk token Solana nyata (scoring max ~55-65 tanpa exceptional conditions)
 
+## Audit History — Bug Fixes (Paper/Live Parity)
+
+### Session 2 — Full Codebase Audit (9 bugs fixed, `cargo check` clean)
+
+| # | File | Bug | Impact |
+|---|---|---|---|
+| 1 | `paper_trading.rs` | `NETWORK_FEE_SOL` duplikat di paper_trading + strategy.rs | Divergence silently jika salah satu diubah |
+| 2 | `paper_trading.rs` | `calc_price_impact_pct` formula 2× lebih besar dari live | Paper entry price lebih buruk dari kenyataan |
+| 3 | `paper_trading.rs` | `profit_sol` disimpan pre-fee; live post-fee | `handle_trade_result`, daily limit, circuit breaker, stats sedikit meleset |
+| 4 | `main.rs` | `check_and_paper_sell` pakai `paper_config.TP/SL/trailing` bukan `trading_config` | Paper sell tidak merespons perubahan runtime ke trading_config |
+| 5 | `strategy.rs` | Default `stop_loss_percent` = 6.0, tapi config.env = 5.0 | Bot pakai SL 6% jika config.env hilang |
+| 6 | `strategy.rs` | Default `min_score_to_buy` = 85.0, tapi config.env = 45.0 | Bot hampir tidak pernah beli jika config.env hilang |
+| 7 | `main.rs` | Default `circuit_breaker_pause_hours` = 2, tapi config.env = 1 | Pause 2 jam bukan 1 jam jika config.env hilang |
+| 8 | `main.rs` | Daily loss % menggunakan paper balance saja sebagai denominator | Untuk live-only mode, perlu PAPER_BALANCE_SOL = modal nyata |
+| 9 | `main.rs` | `adjust_dynamic_score` hanya baca `paper_state.closed_trades` | Score tidak auto-adjust di live-only mode (paper disabled) |
+
+Juga dihapus: 4 field dead (`take_profit/stop_loss/trailing_*`) dari `PaperConfig` struct — semua TP/SL/trailing kini baca langsung dari `trading_config` satu sumber.
+
+### Session 1 — Paper/Live Parity (4 bug sebelumnya)
+- Score multiplier hardcoded 75 → min_score_to_buy
+- Backtest missing break-even stop
+- daily_loss tidak persisted across restarts
+- Health warning silenced permanently
+- Paper buy tidak di-gate oleh live_buy_blocked
+- Live sell price impact formula salah (sold_sol×sol_price)
+- format_alert hardcoded 75
+
 ## Gotchas
 
 - **Wajib isi secrets**: HELIUS_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID — bot crash tanpa ketiga ini
