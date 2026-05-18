@@ -224,6 +224,9 @@ impl PriceTimeline {
 pub enum ExitReason {
     TakeProfit,
     StopLoss,
+    /// Stop loss triggered after TP1 fired with breakeven_after_tp1 enabled.
+    /// Remaining position exited at ~break-even — net trade is still positive.
+    BreakEvenExit,
     TrailingStop,
     HoldToEnd,
 }
@@ -423,13 +426,21 @@ fn simulate_exit(
             weight_total += frac;
         }
 
-        // --- STOP LOSS (full close of remaining) ---
-        if pct <= -sl {
+        // --- STOP LOSS or BREAK-EVEN EXIT (full close of remaining) ---
+        // After TP1 fires with breakeven_after_tp1 enabled, effective SL moves to 0% (entry price).
+        // Mirrors the live and paper trading logic in sell_strategy.rs exactly.
+        let effective_sl_pct = if config.breakeven_after_tp1 && tp1_fired { 0.0 } else { -sl };
+        if pct <= effective_sl_pct {
             let remaining = (1.0 - weight_total).max(0.0);
             weighted_price_sum += price * remaining;
             weight_total += remaining;
             let avg = if weight_total > 0.0 { weighted_price_sum / weight_total } else { price };
-            return (avg, ExitReason::StopLoss);
+            let reason = if config.breakeven_after_tp1 && tp1_fired {
+                ExitReason::BreakEvenExit
+            } else {
+                ExitReason::StopLoss
+            };
+            return (avg, reason);
         }
 
         // --- TRAILING STOP ---
@@ -696,6 +707,7 @@ fn simulate_on_pairs(
 
     let tp_count    = bought.iter().filter(|t| t.exit_reason == ExitReason::TakeProfit).count();
     let sl_count    = bought.iter().filter(|t| t.exit_reason == ExitReason::StopLoss).count();
+    let be_count    = bought.iter().filter(|t| t.exit_reason == ExitReason::BreakEvenExit).count();
     let tr_count    = bought.iter().filter(|t| t.exit_reason == ExitReason::TrailingStop).count();
     let hold_count  = bought.iter().filter(|t| t.exit_reason == ExitReason::HoldToEnd).count();
 
@@ -719,7 +731,7 @@ fn simulate_on_pairs(
         best_trade_symbol: best.map(|t| t.symbol.clone()).unwrap_or_default(),
         worst_trade_pct: worst.map(|t| t.profit_pct).unwrap_or(0.0),
         worst_trade_symbol: worst.map(|t| t.symbol.clone()).unwrap_or_default(),
-        avg_hold_periods: format!("TP:{tp_count} SL:{sl_count} Trail:{tr_count} Hold:{hold_count}"),
+        avg_hold_periods: format!("TP:{tp_count} SL:{sl_count} BE:{be_count} Trail:{tr_count} Hold:{hold_count}"),
         total_sol_deployed,
         config_tp: trading_config.take_profit_percent,
         config_sl: trading_config.stop_loss_percent,

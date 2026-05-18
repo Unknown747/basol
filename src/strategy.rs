@@ -326,9 +326,11 @@ pub enum BuyDecision {
 /// Evaluate whether a token should be bought and what position size to use.
 ///
 /// **Position sizing formula (score-based):**
-/// - Score 85 → (85-75)/25 = 0.40 × max_position_sol
-/// - Score 93 → (93-75)/25 = 0.72 × max_position_sol
-/// - Score 100 → 1.00 × max_position_sol
+/// Scales linearly from min_position_sol (at min_score_to_buy) to max_position_sol (at 100).
+/// Formula: (score - min_score) / (100 - min_score)
+/// - At min_score (e.g. 45): 0% of max → clamp → min_position_sol
+/// - At score 73 (with min=45): (73-45)/(100-45) = 50.9% × max_position_sol
+/// - At score 100: 100% → max_position_sol
 /// - Result is clamped to [min_position_sol, max_position_sol]
 ///
 /// **Note for fixed-size scalping (current config):**
@@ -396,14 +398,16 @@ pub fn evaluate_buy_signal(
         };
     }
 
-    // 7. Calculate position size based on score
+    // 7. Calculate position size based on score.
     //
-    //   multiplier = (score - 75) / 25   → range [0.0, 1.0]
-    //   Score 87  → 0.48 × max
-    //   Score 93  → 0.72 × max
-    //   Score 100 → 1.00 × max
-    //   Clamped to [min_position_sol, max_position_sol]
-    let score_multiplier = ((signal.total_score - 75.0) / 25.0).clamp(0.0, 1.0);
+    //   Scales linearly between min_score_to_buy (→ min position) and 100 (→ max position).
+    //   range = 100 - min_score_to_buy (e.g. 100 - 45 = 55)
+    //   multiplier = (score - min_score) / range  → clamped to [0.0, 1.0]
+    //   With min=45: score 45 → 0%, score 73 → 50.9%, score 100 → 100%
+    //   Clamped to [min_position_sol, max_position_sol].
+    let score_range = (100.0 - config.min_score_to_buy).max(1.0); // avoid div-by-zero
+    let score_multiplier = ((signal.total_score - config.min_score_to_buy) / score_range)
+        .clamp(0.0, 1.0);
     let raw_size = score_multiplier * config.max_position_sol;
     let position_size = raw_size
         .max(config.min_position_sol)

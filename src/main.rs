@@ -383,6 +383,14 @@ struct BotPersistentData {
     positions: HashMap<String, PositionData>,
     #[serde(default)]
     blacklisted_tokens: HashSet<String>,
+    // Daily max loss protection — persisted so a restart cannot bypass the daily limit.
+    // Uses String for NaiveDate to stay serde-compatible across versions.
+    #[serde(default)]
+    daily_loss_sol: f64,
+    #[serde(default)]
+    daily_loss_date_str: String,
+    #[serde(default)]
+    daily_limit_paused: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -882,6 +890,9 @@ impl SolanaBot {
                 performance_stats: PerformanceStats::default(),
                 positions: HashMap::new(),
                 blacklisted_tokens: HashSet::new(),
+                daily_loss_sol: 0.0,
+                daily_loss_date_str: String::new(),
+                daily_limit_paused: false,
             },
             dex_limiter: RateLimiter::new(55, 60),
             tg_limiter: RateLimiter::new(20, 60),
@@ -962,6 +973,12 @@ impl SolanaBot {
             .collect();
         data_to_save["positions"] = serde_json::to_value(&pos_map)?;
 
+        // Inject daily loss protection fields — these live on SolanaBot, not BotPersistentData,
+        // so they must be written manually after serializing self.data.
+        data_to_save["daily_loss_sol"]      = serde_json::json!(self.daily_loss_sol);
+        data_to_save["daily_loss_date_str"] = serde_json::json!(self.daily_loss_date.to_string());
+        data_to_save["daily_limit_paused"]  = serde_json::json!(self.daily_limit_paused);
+
         let json = serde_json::to_string_pretty(&data_to_save)?;
         fs::write("bot_data.json", json)?;
         println!("💾 Data saved — {} seen tokens, {} tracked, {} active positions",
@@ -981,6 +998,11 @@ impl SolanaBot {
                             .map(|(k, v)| (k.clone(), Position::from(v.clone())))
                             .collect();
 
+                        // Restore daily loss protection before moving data into self.data
+                        let saved_daily_loss_sol    = data.daily_loss_sol;
+                        let saved_daily_loss_date   = data.daily_loss_date_str.clone();
+                        let saved_daily_limit_paused = data.daily_limit_paused;
+
                         self.data = data;
                         let cutoff = Utc::now() - chrono::Duration::days(30);
                         self.data.seen_tokens.retain(|_, ts| {
@@ -989,6 +1011,28 @@ impl SolanaBot {
                                 .unwrap_or(false)
                         });
                         self.positions = saved_positions;
+
+                        // Restore daily loss protection — survives restart so the bot
+                        // cannot bypass the daily limit by restarting during a bad day.
+                        self.daily_loss_sol = saved_daily_loss_sol;
+                        self.daily_limit_paused = saved_daily_limit_paused;
+                        if !saved_daily_loss_date.is_empty() {
+                            if let Ok(d) = saved_daily_loss_date.parse::<chrono::NaiveDate>() {
+                                self.daily_loss_date = d;
+                            }
+                        }
+                        if self.daily_limit_paused {
+                            println!(
+                                "[DAILY LIMIT] ⚠️ Restored from save: {:.5} SOL lost, limit still active — buying paused until 00:00 UTC",
+                                self.daily_loss_sol
+                            );
+                        } else if self.daily_loss_sol > 0.0 {
+                            println!(
+                                "[DAILY LIMIT] Restored from save: {:.5} SOL lost today",
+                                self.daily_loss_sol
+                            );
+                        }
+
                         println!("📂 Data loaded: {} seen tokens, {} tracked, {} active positions",
                             self.data.seen_tokens.len(),
                             self.data.tracked_tokens.len(),
@@ -2947,11 +2991,11 @@ impl SolanaBot {
     // ============================================================
 
     async fn send_health_warning_if_needed(&mut self) {
-        // Only fire if no paper trade has happened and at least 6h have passed
+        // Fire if no paper trade has happened in the last 6h.
+        // Uses last_trade_or_buy (reset on every buy) — correct even after many sessions.
+        // NOTE: do NOT gate on paper_state.total_buys > 0 — that silences the warning
+        // permanently after the very first trade, even when the bot later stops trading.
         let no_trade_hours = 6u64;
-        if self.paper_state.total_buys > 0 {
-            return; // trades are happening, all good
-        }
         if self.last_trade_or_buy.elapsed() < Duration::from_secs(no_trade_hours * 3600) {
             return;
         }
