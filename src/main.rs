@@ -1977,7 +1977,11 @@ impl SolanaBot {
         if self.trading_config.trading_enabled {
             m.push_str(&format!("\n🤖 **Auto Buy:** {}",
                 if a.total_score >= self.trading_config.min_score_to_buy {
-                    format!("Will buy {:.3} SOL", ((a.total_score - 75.0) / 25.0).clamp(0.0, 1.0) * self.trading_config.max_position_sol)
+                    {
+                        let min_s = self.trading_config.min_score_to_buy;
+                        let mult = ((a.total_score - min_s) / (100.0_f64 - min_s)).clamp(0.0, 1.0);
+                        format!("Will buy {:.3} SOL", mult * self.trading_config.max_position_sol)
+                    }
                 } else {
                     "Does not meet criteria".to_string()
                 }
@@ -2153,12 +2157,12 @@ impl SolanaBot {
         // Execute sells for triggered positions
         for (addr, decision) in decisions {
             if let SellDecision::Sell { percentage, trigger } = decision {
-                let (symbol, _name, buy_price, amount_sol) = {
+                let (symbol, _name, buy_price, amount_sol, token_amount) = {
                     let pos = match self.positions.get(&addr) {
                         Some(p) => p,
                         None => continue,
                     };
-                    (pos.symbol.clone(), pos.name.clone(), pos.buy_price_usd, pos.amount_in_sol)
+                    (pos.symbol.clone(), pos.name.clone(), pos.buy_price_usd, pos.amount_in_sol, pos.token_amount)
                 };
 
                 let current_price = prices.get(&addr).copied().unwrap_or(0.0);
@@ -2187,8 +2191,12 @@ impl SolanaBot {
                         let liquidity_usd = if let Some(p) = self.positions.get(&addr) {
                             p.liquidity_at_entry
                         } else { 0.0 };
-                        // Price impact uses the USD value of tokens being sold vs pool depth
-                        let sell_value_usd = sold_sol * self.sol_price_usd;
+                        // Price impact: use actual token value at current price, NOT original
+                        // SOL capital. At high profits (e.g. 5x), token value is 5× larger
+                        // which produces a larger and more accurate impact estimate — identical
+                        // to paper trading's execute_sell() which uses sold_tokens × current_price.
+                        let tokens_to_sell = token_amount * percentage / 100.0;
+                        let sell_value_usd = tokens_to_sell * current_price;
                         let sell_impact_pct = if liquidity_usd > 0.0 {
                             (sell_value_usd / (liquidity_usd + sell_value_usd) * 100.0).min(30.0)
                         } else { 0.0 };
@@ -3532,9 +3540,12 @@ impl SolanaBot {
                     }
 
                     // -----------------------------------------------
-                    // PAPER BUY - always runs, even when live is paused
+                    // PAPER BUY - same gates as live buy so simulation
+                    // mirrors exactly what live would do
                     // -----------------------------------------------
-                    self.check_and_paper_buy(&analysis).await;
+                    if !live_buy_blocked {
+                        self.check_and_paper_buy(&analysis).await;
+                    }
 
                     sleep(Duration::from_secs(3)).await;
                 } else {
