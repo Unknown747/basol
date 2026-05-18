@@ -181,12 +181,15 @@ impl PriceTimeline {
             current_price
         };
 
-        // Avoid negative prices (can happen if change > 100%)
+        // Clamp reconstructed prices to a small positive floor.
+        // A -100% change produces division by zero (inf). A >100% drop is data noise —
+        // treat it as a near-zero price (0.1% of current) rather than inf/NaN.
+        let floor = current_price * 0.001;
         Self {
-            at_24h_ago: at_24h.abs().max(current_price * 0.001),
-            at_6h_ago: at_6h.abs().max(current_price * 0.001),
-            at_1h_ago: at_1h.abs().max(current_price * 0.001),
-            at_5m_ago: at_5m.abs().max(current_price * 0.001),
+            at_24h_ago: if at_24h.is_finite() { at_24h.abs().max(floor) } else { floor },
+            at_6h_ago:  if at_6h.is_finite()  { at_6h.abs().max(floor)  } else { floor },
+            at_1h_ago:  if at_1h.is_finite()  { at_1h.abs().max(floor)  } else { floor },
+            at_5m_ago:  if at_5m.is_finite()  { at_5m.abs().max(floor)  } else { floor },
             current: current_price,
         }
     }

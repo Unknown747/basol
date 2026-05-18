@@ -335,8 +335,18 @@ impl PaperTradingState {
         // pushes the price down, so we calculate the fraction of pool displaced.
         let sell_value_usd = sold_tokens * quoted_sell_price;
         let sell_impact_pct = if liquidity > 0.0 {
-            (sell_value_usd / (liquidity + sell_value_usd) * 100.0).min(30.0)
+            // Cap at 10% and abort — mirrors live wallet.rs execute_sell() guard added in
+            // audit session 3. Previously capped at 30% which let paper "execute" sells
+            // that the live bot would refuse (high-slippage thin-pool protection).
+            sell_value_usd / (liquidity + sell_value_usd) * 100.0
         } else { 0.0 };
+
+        if sell_impact_pct > 10.0 {
+            return Err(format!(
+                "Sell price impact too high: {sell_impact_pct:.2}% — skipping (mirrors live guard)"
+            ));
+        }
+        let sell_impact_pct = sell_impact_pct.min(10.0);
 
         let total_cost_pct      = slippage_percent + sell_impact_pct;
         let effective_sell_price = quoted_sell_price * (1.0 - total_cost_pct / 100.0);

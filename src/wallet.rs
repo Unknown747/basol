@@ -258,7 +258,16 @@ impl WalletManager {
             return Err(format!("No token balance for {token_address}"));
         }
 
-        let decimals = self.get_token_decimals(token_address).await.unwrap_or(6);
+        let decimals = match self.get_token_decimals(token_address).await {
+            Ok(d) => d,
+            Err(e) => {
+                // Most pump.fun / Raydium meme tokens use 6 decimals. However some SPL
+                // tokens use 9 — if decimals are fetched wrong, sell_raw is 1000× too small
+                // and the sell silently under-fills. Log a clear warning so it's visible.
+                println!("[SELL] ⚠️  Could not fetch decimals for {token_address}: {e} — defaulting to 6");
+                6
+            }
+        };
         let sell_amount = token_balance * (percentage_to_sell / 100.0);
         let sell_raw = (sell_amount * 10f64.powi(decimals as i32)) as u64;
         let slippage_bps = (slippage * 100.0) as u32;
