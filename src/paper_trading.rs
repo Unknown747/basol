@@ -34,7 +34,7 @@ impl PaperConfig {
         Self {
             enabled: std::env::var("PAPER_TRADING_ENABLED")
                 .map(|v| v == "true" || v == "1")
-                .unwrap_or(false),
+                .unwrap_or(true),  // default true — matches config.env PAPER_TRADING_ENABLED=true
             virtual_balance_sol: std::env::var("PAPER_BALANCE_SOL")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(0.1),
             max_position_sol: std::env::var("MAX_POSITION_SOL")

@@ -450,7 +450,10 @@ fn simulate_exit(
                 // Anchor to highest_price — matches live and paper trading exactly
                 trailing_stop = highest * (1.0 - trail_dist / 100.0);
             } else {
-                let new_stop = highest * (1.0 - trail_dist / 100.0);
+                // Use current price (not highest) — matches live positions.rs
+                // update_trailing_stop() and paper_trading.rs evaluate_positions().
+                // Using highest here caused backtest to exit sooner than live trading.
+                let new_stop = price * (1.0 - trail_dist / 100.0);
                 if new_stop > trailing_stop {
                     trailing_stop = new_stop;
                 }

@@ -105,7 +105,7 @@ pub enum SellDecision {
 /// - TP1 at +8%:  net ~+4.5% (above break-even ✅)
 /// - TP2 at +15%: net ~+11.5% (good)
 /// - Final TP at +25%: net ~+21.5% (strong)
-/// - SL at -6%: net ~-9.5% (quick cut, preserves capital)
+/// - SL at -5%: net ~-8.5% (quick cut, preserves capital)
 pub fn evaluate_position(
     position: &mut Position,
     current_price: f64,

@@ -304,6 +304,13 @@ impl WalletManager {
         ).await?;
 
         let price_impact: f64 = quote.price_impact_pct.parse().unwrap_or(0.0);
+        // Guard against catastrophic sells into thin pools — mirrors buy-side check.
+        // Without this, a partial TP sell on a low-liquidity pool could lose >10% to impact.
+        if price_impact > 10.0 {
+            return Err(format!(
+                "Sell price impact too high: {price_impact:.2}% — skipping to protect capital"
+            ));
+        }
         println!(
             "[SELL] Quote OK - receiving: {} lamports SOL, price impact: {:.2}%",
             quote.out_amount, price_impact
