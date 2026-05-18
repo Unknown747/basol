@@ -142,6 +142,14 @@ for f in "${RUNTIME_FILES[@]}"; do
     fi
 done
 
+# Untrack entire target/ directory — build artifacts must never be in git
+# This is the root cause of "target/.rustc_info.json: needs merge" conflicts
+if git ls-files --error-unmatch "target/" &>/dev/null 2>&1 || \
+   [[ -n "$(git ls-files target/ 2>/dev/null)" ]]; then
+    git rm --cached -r --quiet target/ 2>/dev/null || true
+    info "Un-tracked from git: target/ (build artifacts — kept on disk)"
+fi
+
 if [[ "$BEFORE_HASH" == "$REMOTE_HASH" ]]; then
     success "Already up to date ($BEFORE_HASH)"
     echo ""

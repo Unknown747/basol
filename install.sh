@@ -2,7 +2,7 @@
 # ============================================================
 #  Basol — One-click Install / Update for Ubuntu VPS
 #  Usage:
-#    curl -fsSL https://raw.githubusercontent.com/Unknown747/Baxsol/main/install.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/Unknown747/Baxsol/master/install.sh | bash
 #  or, if already cloned:
 #    bash install.sh
 # ============================================================
@@ -81,7 +81,8 @@ step "3/6  Fetching latest code"
 
 if [[ "$IS_UPDATE" == true ]]; then
     cd "$INSTALL_DIR"
-    git pull --ff-only origin main
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "master")
+    git pull --ff-only origin "$CURRENT_BRANCH"
     success "Code updated"
 else
     git clone "$REPO_URL" "$INSTALL_DIR"
