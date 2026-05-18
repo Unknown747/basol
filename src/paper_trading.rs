@@ -473,6 +473,7 @@ impl PaperTradingState {
         tp2_sell_pct: f64,
         max_hold_minutes: u64,
         time_exit_threshold: f64,
+        breakeven_after_tp1: bool,
     ) -> Vec<(String, String, f64, f64, u8)> {
         let mut to_sell: Vec<(String, String, f64, f64, u8)> = Vec::new();
 
@@ -489,13 +490,18 @@ impl PaperTradingState {
             let profit_pct  = pos.profit_percent(current_price);
             let age_minutes = pos.age_minutes();
 
-            // 1. STOP LOSS — cut loss, sell ALL
-            if profit_pct <= -stop_loss {
-                to_sell.push((
-                    addr.clone(),
-                    format!("Stop Loss {profit_pct:.1}%"),
-                    current_price, 100.0, 0,
-                ));
+            // 1. STOP LOSS or BREAK-EVEN EXIT
+            //    After TP1 fires and breakeven_after_tp1 is enabled, the effective SL moves
+            //    to 0% (entry price). TP1 already locked profit, so remaining position can
+            //    never produce a net loss on the overall trade.
+            let effective_sl = if breakeven_after_tp1 && pos.tp1_fired { 0.0 } else { -stop_loss };
+            if profit_pct <= effective_sl {
+                let reason = if breakeven_after_tp1 && pos.tp1_fired {
+                    format!("Break-Even Exit {profit_pct:.1}% (TP1 protected, capital safe)")
+                } else {
+                    format!("Stop Loss {profit_pct:.1}%")
+                };
+                to_sell.push((addr.clone(), reason, current_price, 100.0, 0));
                 continue;
             }
 

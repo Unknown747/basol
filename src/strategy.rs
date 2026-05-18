@@ -191,6 +191,14 @@ pub struct TradingConfig {
     /// Percentage of remaining position to sell at TP2 (e.g. 50.0 = half of remainder)
     pub tp2_sell_percent: f64,
     // Remaining position (100 - tp1 - tp2*(100-tp1)/100) is managed by trailing stop or final TP
+
+    // === CAPITAL PROTECTION ===
+    /// After TP1 fires, move stop loss to break-even (0%) so remaining position can never produce a net loss.
+    /// TP1 profit already covers fees, so any reversal to entry price = net positive trade.
+    pub breakeven_after_tp1: bool,
+    /// Max allowed loss per UTC day as % of initial balance.
+    /// If daily loss exceeds this, buy scanning is paused until the next UTC day.
+    pub daily_max_loss_pct: f64,
 }
 
 impl TradingConfig {
@@ -247,6 +255,13 @@ impl TradingConfig {
         let tp2_sell_percent = std::env::var("TP2_SELL_PERCENT")
             .ok().and_then(|v| v.parse().ok()).unwrap_or(50.0);
 
+        // Capital protection
+        let breakeven_after_tp1 = std::env::var("BREAKEVEN_AFTER_TP1")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(true);
+        let daily_max_loss_pct = std::env::var("DAILY_MAX_LOSS_PCT")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(8.0);
+
         Self {
             trading_enabled,
             max_position_sol,
@@ -265,6 +280,8 @@ impl TradingConfig {
             tp1_sell_percent,
             tp2_percent,
             tp2_sell_percent,
+            breakeven_after_tp1,
+            daily_max_loss_pct,
         }
     }
 

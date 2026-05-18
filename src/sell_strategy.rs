@@ -24,6 +24,9 @@ pub enum SellTrigger {
     TrailingStop { profit_percent: f64 },
     /// Position stuck too long — exit to free up capital
     TimeExit { hold_minutes: i64, profit_percent: f64 },
+    /// Break-even protection — TP1 already fired and price fell back to entry.
+    /// Net trade result is still positive because TP1 profit was already locked in.
+    BreakEvenExit { profit_percent: f64 },
 }
 
 impl SellTrigger {
@@ -46,6 +49,12 @@ impl SellTrigger {
                     if *profit_percent >= 0.0 { "+" } else { "" },
                     profit_percent
                 ),
+            SellTrigger::BreakEvenExit { profit_percent } =>
+                format!(
+                    "BREAK-EVEN EXIT {}{:.1}% (TP1 locked profit, capital protected)",
+                    if *profit_percent >= 0.0 { "+" } else { "" },
+                    profit_percent
+                ),
         }
     }
 
@@ -56,6 +65,7 @@ impl SellTrigger {
             SellTrigger::StopLoss { .. }           => "🛑",
             SellTrigger::TrailingStop { .. }       => "📉",
             SellTrigger::TimeExit { .. }           => "⏰",
+            SellTrigger::BreakEvenExit { .. }      => "🛡️",
         }
     }
 }
@@ -113,18 +123,41 @@ pub fn evaluate_position(
     position.update_highest(current_price);
 
     // -------------------------------------------------------
-    // 1. STOP LOSS — always sell 100%, cut loss immediately
-    //    Never partial SL — losses can deepen!
+    // 1. STOP LOSS or BREAK-EVEN EXIT
+    //
+    //    Normal: sell 100% if loss exceeds stop_loss_percent.
+    //    Break-even mode (tp1_fired + breakeven_after_tp1 enabled):
+    //      After TP1 fires, the remaining position SL moves to 0% (entry price).
+    //      TP1 already locked in profit (+8% × 33% = +2.64% of original position),
+    //      so exiting the remainder at break-even still produces a net-positive trade.
+    //      This guarantees: any token that reaches TP1 can NEVER cause a net loss.
     // -------------------------------------------------------
-    if profit_pct <= -config.stop_loss_percent {
-        println!(
-            "[SELL EVAL] 🛑 {} - Stop loss: {:.1}% (limit: -{:.1}%)",
-            position.symbol, profit_pct, config.stop_loss_percent
-        );
-        return SellDecision::Sell {
-            percentage: 100.0,
-            trigger: SellTrigger::StopLoss { loss_percent: profit_pct.abs() },
-        };
+    let effective_sl_pct = if config.breakeven_after_tp1 && position.tp1_fired {
+        0.0  // break-even: protect remaining position at entry price
+    } else {
+        -config.stop_loss_percent
+    };
+
+    if profit_pct <= effective_sl_pct {
+        if config.breakeven_after_tp1 && position.tp1_fired {
+            println!(
+                "[SELL EVAL] 🛡️ {} - Break-even exit: {:.1}% (SL moved to 0% after TP1)",
+                position.symbol, profit_pct
+            );
+            return SellDecision::Sell {
+                percentage: 100.0,
+                trigger: SellTrigger::BreakEvenExit { profit_percent: profit_pct },
+            };
+        } else {
+            println!(
+                "[SELL EVAL] 🛑 {} - Stop loss: {:.1}% (limit: -{:.1}%)",
+                position.symbol, profit_pct, config.stop_loss_percent
+            );
+            return SellDecision::Sell {
+                percentage: 100.0,
+                trigger: SellTrigger::StopLoss { loss_percent: profit_pct.abs() },
+            };
+        }
     }
 
     // -------------------------------------------------------

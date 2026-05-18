@@ -765,6 +765,14 @@ struct SolanaBot {
     last_trade_or_buy: Instant,
     /// Last time we sent the no-trade health warning
     last_health_warning: Instant,
+
+    // === Daily Max Loss Protection ===
+    /// Cumulative SOL lost today (reset at UTC midnight)
+    daily_loss_sol: f64,
+    /// UTC date of the current daily_loss_sol period
+    daily_loss_date: chrono::NaiveDate,
+    /// True when daily loss limit has been reached — buy scanning paused until next UTC day
+    daily_limit_paused: bool,
 }
 
 impl SolanaBot {
@@ -931,6 +939,10 @@ impl SolanaBot {
             last_health_warning: Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap_or_else(Instant::now),
+            // Daily max loss protection
+            daily_loss_sol: 0.0,
+            daily_loss_date: Utc::now().date_naive(),
+            daily_limit_paused: false,
         }
     }
 
@@ -2153,9 +2165,9 @@ impl SolanaBot {
                             self.data.performance_stats.total_loss_sol += profit_sol.abs();
                         }
 
-                        // Circuit breaker: only track result on full position close
+                        // Circuit breaker + daily limit: only track on full position close
                         if percentage >= 100.0 {
-                            self.handle_trade_result(profit_sol < 0.0).await;
+                            self.handle_trade_result(profit_sol).await;
                         }
 
                         // Send notification
@@ -2351,6 +2363,7 @@ impl SolanaBot {
             self.trading_config.tp2_sell_percent,
             self.trading_config.max_hold_minutes,
             self.trading_config.time_exit_threshold_pct,
+            self.trading_config.breakeven_after_tp1,
         );
 
         // Execute paper sells
@@ -2361,14 +2374,13 @@ impl SolanaBot {
                     let msg = format_paper_sell_notification(&trade, balance);
                     let _ = self.send_message(&msg).await;
 
-                    // Circuit breaker: only track result on full position close —
+                    // Circuit breaker + daily limit: only track on full position close —
                     // matches live trading behavior (check_and_sell_positions does the same).
-                    // Partial TP1/TP2 sells must NOT reset consecutive_losses, otherwise
+                    // Partial TP1/TP2 sells must NOT trigger these checks, otherwise
                     // a TP1 fire between two SL losses would silently clear the counter
                     // and prevent the circuit breaker from ever triggering.
                     if tp_stage == 0 {
-                        let is_loss = trade.profit_sol < 0.0;
-                        self.handle_trade_result(is_loss).await;
+                        self.handle_trade_result(trade.profit_sol).await;
                     }
 
                     // Save after sell
@@ -2394,10 +2406,69 @@ impl SolanaBot {
     }
 
     // ============================================================
-    // CIRCUIT BREAKER — Auto-pause after N consecutive losses
+    // CIRCUIT BREAKER + DAILY MAX LOSS PROTECTION
     // ============================================================
 
-    async fn handle_trade_result(&mut self, is_loss: bool) {
+    /// Called after every full position close (not partial TP).
+    /// profit_sol: positive = profit, negative = loss.
+    ///
+    /// Handles two independent protection layers:
+    ///   1. Circuit breaker — pause after N consecutive losses
+    ///   2. Daily max loss — pause until next UTC day if daily loss exceeds limit
+    async fn handle_trade_result(&mut self, profit_sol: f64) {
+        let is_loss = profit_sol < 0.0;
+
+        // -------------------------------------------------------
+        // DAILY MAX LOSS PROTECTION
+        // Reset counter at UTC midnight, then check limit.
+        // -------------------------------------------------------
+        let today = Utc::now().date_naive();
+        if today != self.daily_loss_date {
+            // New UTC day — reset the counter
+            if self.daily_limit_paused {
+                self.daily_limit_paused = false;
+                println!("[DAILY LIMIT] New UTC day — daily loss counter reset, buying resumed");
+                let _ = self.send_message(
+                    "🌅 **New day — daily loss protection reset.**\nBuy scanning resumed for today."
+                ).await;
+            }
+            self.daily_loss_sol = 0.0;
+            self.daily_loss_date = today;
+        }
+
+        if is_loss {
+            self.daily_loss_sol += profit_sol.abs();
+            let initial_bal = self.paper_state.initial_balance_sol
+                .max(self.trading_config.max_position_sol); // safe fallback
+            let daily_loss_pct = self.daily_loss_sol / initial_bal * 100.0;
+            let daily_limit_pct = self.trading_config.daily_max_loss_pct;
+
+            println!(
+                "[DAILY LIMIT] Today's loss: {:.5} SOL ({:.1}% / {:.1}% limit)",
+                self.daily_loss_sol, daily_loss_pct, daily_limit_pct
+            );
+
+            if !self.daily_limit_paused && daily_loss_pct >= daily_limit_pct {
+                self.daily_limit_paused = true;
+                let msg = format!(
+                    "🛑 **Daily Loss Limit Reached!**\n\
+                    ═══════════════════════════════\n\
+                    📉 Lost {:.5} SOL today ({:.1}% of balance)\n\
+                    🎯 Limit: {:.1}% — protecting remaining capital\n\
+                    ⏸ Buy scanning paused until next UTC day\n\
+                    📊 Sell monitoring of open positions continues\n\
+                    🌅 Will resume automatically at 00:00 UTC\n\
+                    💡 Use /resume to override early",
+                    self.daily_loss_sol, daily_loss_pct, daily_limit_pct,
+                );
+                let _ = self.send_message(&msg).await;
+                println!("[DAILY LIMIT] ACTIVATED — buy scan paused until {}", (today + chrono::Duration::days(1)));
+            }
+        }
+
+        // -------------------------------------------------------
+        // CIRCUIT BREAKER — pause after N consecutive losses
+        // -------------------------------------------------------
         if is_loss {
             self.consecutive_losses += 1;
             println!("[CIRCUIT] Consecutive losses: {}/{}", self.consecutive_losses, self.circuit_breaker_losses);
@@ -2697,7 +2768,11 @@ impl SolanaBot {
     }
 
     fn build_status_message(&self) -> String {
-        let cb_status = if let Some(until) = self.circuit_breaker_until {
+        let cb_status = if self.daily_limit_paused {
+            let initial_bal = self.paper_state.initial_balance_sol.max(0.01);
+            let pct = self.daily_loss_sol / initial_bal * 100.0;
+            format!("🛑 Daily limit ({:.1}% lost today — resumes at 00:00 UTC)", pct)
+        } else if let Some(until) = self.circuit_breaker_until {
             if until > Instant::now() {
                 let remaining_mins = until.duration_since(Instant::now()).as_secs() / 60;
                 format!("🔴 Circuit breaker ({remaining_mins} min left)")
@@ -2709,6 +2784,13 @@ impl SolanaBot {
         } else {
             "🟢 Active".to_string()
         };
+
+        let initial_bal = self.paper_state.initial_balance_sol.max(0.01);
+        let daily_loss_pct = self.daily_loss_sol / initial_bal * 100.0;
+        let daily_protection_line = format!(
+            "🛡️ Daily loss: {:.5} SOL ({:.1}% / {:.1}% limit)",
+            self.daily_loss_sol, daily_loss_pct, self.trading_config.daily_max_loss_pct,
+        );
 
         let total_pnl = self.paper_state.total_profit_sol - self.paper_state.total_loss_sol;
         let roi = if self.paper_state.initial_balance_sol > 0.0 {
@@ -2734,6 +2816,9 @@ impl SolanaBot {
             🎯 Score Threshold: {:.1}/100 (base: {:.1})\n\
             📈 Consecutive Losses: {}/{}\n\
             🌍 Peak Hours Only: {}\n\n\
+            🛡️ **Capital Protection:**\n\
+            {}\n\
+            🔰 Break-even stop after TP1: {}\n\n\
             🔬 **Scan Health:**\n\
             🏆 Best score seen: {}\n\
             ✅ Tokens qualified: {}\n\
@@ -2755,6 +2840,8 @@ impl SolanaBot {
             if self.peak_hours_only {
                 if self.off_peak_trading_enabled { "ON + off-peak STRICT" } else { "ON" }
             } else { "OFF" },
+            daily_protection_line,
+            if self.trading_config.breakeven_after_tp1 { "✅ ON" } else { "❌ OFF" },
             best_score_str,
             self.tokens_qualified_session,
             helius_health,
@@ -3249,11 +3336,25 @@ impl SolanaBot {
                 .map(|u| u > Instant::now())
                 .unwrap_or(false);
 
-            // When paused or circuit-broken: skip LIVE buy only.
+            // Daily max loss protection — reset at UTC midnight if needed
+            let today = Utc::now().date_naive();
+            if self.daily_limit_paused && today != self.daily_loss_date {
+                self.daily_limit_paused = false;
+                self.daily_loss_sol = 0.0;
+                self.daily_loss_date = today;
+                println!("[DAILY LIMIT] New UTC day — daily loss counter reset, buying resumed");
+                let _ = self.send_message(
+                    "🌅 **New day — daily loss protection reset.**\nBuy scanning resumed for today."
+                ).await;
+            }
+
+            // When paused, circuit-broken, or daily limit hit: skip LIVE buy only.
             // Paper trading continues scanning so simulation stays accurate.
-            let live_buy_blocked = self.is_paused || circuit_broken;
+            let live_buy_blocked = self.is_paused || circuit_broken || self.daily_limit_paused;
             if live_buy_blocked {
-                let reason = if circuit_broken {
+                let reason = if self.daily_limit_paused {
+                    format!("daily loss limit ({:.1}% reached)", self.trading_config.daily_max_loss_pct)
+                } else if circuit_broken {
                     format!("circuit breaker ({} consec. losses)", self.consecutive_losses)
                 } else {
                     "manual pause".to_string()
