@@ -113,6 +113,7 @@ install.sh         — one-click install untuk Ubuntu VPS (systemd)
 - Comment & log language: English
 - Scalping dengan modal kecil: MAX_POSITION_SOL=0.03, MAX_POSITIONS=2
 - Selalu fee-aware — tidak ada target profit yang mengabaikan biaya transaksi
+- `MIN_SCORE_TO_BUY=45` — threshold realistis untuk token Solana nyata (scoring max ~55-65 tanpa exceptional conditions)
 
 ## Gotchas
 

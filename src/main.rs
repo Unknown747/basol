@@ -753,6 +753,18 @@ struct SolanaBot {
     // === Scheduled reports ===
     last_daily_report_date: String,
     last_weekly_report_date: String,
+
+    // === Scan health monitoring ===
+    /// Consecutive times get_token_metadata returned None (Helius down/no key)
+    helius_consecutive_failures: u32,
+    /// Best token score seen this bot session (for diagnostics)
+    best_score_seen: f64,
+    /// Total tokens that made it past full_analyze this session
+    tokens_qualified_session: u64,
+    /// Timestamp of the last paper or live buy — used for no-trade alert
+    last_trade_or_buy: Instant,
+    /// Last time we sent the no-trade health warning
+    last_health_warning: Instant,
 }
 
 impl SolanaBot {
@@ -908,6 +920,17 @@ impl SolanaBot {
             // send a spurious report immediately on startup
             last_daily_report_date: now_date,
             last_weekly_report_date: now_week,
+            // Scan health monitoring
+            helius_consecutive_failures: 0,
+            best_score_seen: 0.0,
+            tokens_qualified_session: 0,
+            // Initialize far in the past so health warning can fire after 6h if needed
+            last_trade_or_buy: Instant::now()
+                .checked_sub(Duration::from_secs(60))
+                .unwrap_or_else(Instant::now),
+            last_health_warning: Instant::now()
+                .checked_sub(Duration::from_secs(3600))
+                .unwrap_or_else(Instant::now),
         }
     }
 
@@ -1133,6 +1156,8 @@ impl SolanaBot {
                     // None for virtually every new token — blocking all buys silently.
                     // The mint/freeze authority fields live in account.data.parsed.info
                     // and are available independently of Metaplex metadata status.
+                    // Reset consecutive failure counter on success
+                    self.helius_consecutive_failures = 0;
                     let mint_auth = item.get("account")
                         .and_then(|a| a.get("data"))
                         .and_then(|d| d.get("parsed"))
@@ -1154,7 +1179,10 @@ impl SolanaBot {
                         supply: None,
                     });
                 }
-                _ => return None,
+                _ => {
+                    self.helius_consecutive_failures += 1;
+                    return None;
+                }
             }
         }
     }
@@ -2269,6 +2297,8 @@ impl SolanaBot {
                     if let Err(e) = save_paper_state(&self.paper_state) {
                         println!("[PAPER] Failed to save state: {e}");
                     }
+                    // Reset no-trade timer
+                    self.last_trade_or_buy = Instant::now();
                 }
                 Err(e) => println!("[PAPER BUY] Skip: {e}"),
             }
@@ -2685,14 +2715,30 @@ impl SolanaBot {
             total_pnl / self.paper_state.initial_balance_sol * 100.0
         } else { 0.0 };
 
+        let helius_health = if self.helius_consecutive_failures == 0 {
+            "✅ OK".to_string()
+        } else {
+            format!("⚠️ {} consecutive fails", self.helius_consecutive_failures)
+        };
+        let best_score_str = if self.best_score_seen > 0.0 {
+            format!("{:.1}/100", self.best_score_seen)
+        } else {
+            "none yet".to_string()
+        };
+
         format!(
             "📊 **Basol Bot Status**\n\
             ═══════════════════════════════\n\
             🤖 Status: {}\n\
             💰 SOL Price: ${:.2}\n\
-            🎯 Score Threshold: {:.1}/100\n\
+            🎯 Score Threshold: {:.1}/100 (base: {:.1})\n\
             📈 Consecutive Losses: {}/{}\n\
             🌍 Peak Hours Only: {}\n\n\
+            🔬 **Scan Health:**\n\
+            🏆 Best score seen: {}\n\
+            ✅ Tokens qualified: {}\n\
+            🔑 Helius API: {}\n\
+            👁 Seen: {} tokens | ⛔ Blacklisted: {}\n\n\
             💼 **Paper Trading:**\n\
             💵 Balance: {:.4} SOL\n\
             📊 Open Positions: {}\n\
@@ -2700,19 +2746,19 @@ impl SolanaBot {
             💹 Profit Factor: {:.2}\n\
             💰 Total P&L: {}{:.5} SOL ({}{:.1}% ROI)\n\
             📈 Total Trades: {}\n\n\
-            🔒 **Live Trading:** {}\n\
-            👁 Seen: {} tokens | ⛔ Blacklisted: {}",
+            🔒 **Live Trading:** {}",
             cb_status,
             self.sol_price_usd,
             self.dynamic_min_score,
+            self.base_min_score,
             self.consecutive_losses, self.circuit_breaker_losses,
             if self.peak_hours_only {
-                if self.off_peak_trading_enabled {
-                    "ON + off-peak STRICT"
-                } else {
-                    "ON"
-                }
+                if self.off_peak_trading_enabled { "ON + off-peak STRICT" } else { "ON" }
             } else { "OFF" },
+            best_score_str,
+            self.tokens_qualified_session,
+            helius_health,
+            self.data.seen_tokens.len(), self.data.blacklisted_tokens.len(),
             self.paper_state.current_balance_sol,
             self.paper_state.positions.len(),
             self.paper_state.win_rate(),
@@ -2721,7 +2767,6 @@ impl SolanaBot {
             if roi >= 0.0 { "+" } else { "" }, roi,
             self.paper_state.total_sells,
             if self.trading_config.trading_enabled && self.wallet.is_some() { "🟢 ACTIVE" } else { "🔴 INACTIVE" },
-            self.data.seen_tokens.len(), self.data.blacklisted_tokens.len(),
         )
     }
 
@@ -2808,6 +2853,66 @@ impl SolanaBot {
             self.trading_config.min_score_to_buy = self.dynamic_min_score;
             self.paper_config.min_score_to_buy = self.dynamic_min_score;
         }
+    }
+
+    // ============================================================
+    // SCAN HEALTH WARNING — fires every 6h if no trade has happened
+    // ============================================================
+
+    async fn send_health_warning_if_needed(&mut self) {
+        // Only fire if no paper trade has happened and at least 6h have passed
+        let no_trade_hours = 6u64;
+        if self.paper_state.total_buys > 0 {
+            return; // trades are happening, all good
+        }
+        if self.last_trade_or_buy.elapsed() < Duration::from_secs(no_trade_hours * 3600) {
+            return;
+        }
+        // Don't spam — only once every 6h
+        if self.last_health_warning.elapsed() < Duration::from_secs(no_trade_hours * 3600) {
+            return;
+        }
+        self.last_health_warning = Instant::now();
+
+        let helius_status = if self.helius_consecutive_failures == 0 {
+            "✅ OK".to_string()
+        } else {
+            format!("⚠️ {} consecutive failures", self.helius_consecutive_failures)
+        };
+
+        let best_score_str = if self.best_score_seen > 0.0 {
+            format!("{:.1}/100", self.best_score_seen)
+        } else {
+            "no token qualified yet".to_string()
+        };
+
+        let hours_running = self.last_trade_or_buy.elapsed().as_secs() / 3600;
+
+        let msg = format!(
+            "⚠️ **No Trade Alert**\n\
+            ═══════════════════════════════\n\
+            🕐 No paper trade in {}h+\n\n\
+            📊 **Scan Health:**\n\
+            🔬 Tokens passed full analysis: {}\n\
+            🏆 Best score seen: {}\n\
+            🎯 Current threshold: {:.1}/100\n\
+            🔑 Helius API: {}\n\
+            📦 Seen tokens total: {}\n\n\
+            🔍 **Possible causes:**\n\
+            • Score threshold too high for current market\n  → Try `/score` then lower `MIN_SCORE_TO_BUY` in config.env\n\
+            • All tokens filtered by liquidity/momentum/bundled check\n\
+            • DexScreener not returning new Solana tokens\n\n\
+            💡 Send `/status` for full bot state\n\
+            💡 Send `/helius` to recheck API keys",
+            hours_running,
+            self.tokens_qualified_session,
+            best_score_str,
+            self.dynamic_min_score,
+            helius_status,
+            self.data.seen_tokens.len(),
+        );
+        println!("[HEALTH] ⚠️ No trade warning sent to Telegram");
+        let _ = self.send_message(&msg).await;
     }
 
     // ============================================================
@@ -3123,6 +3228,11 @@ impl SolanaBot {
             }
 
             // -------------------------------------------------------
+            // SCAN HEALTH WARNING — alert if no trade in 6h
+            // -------------------------------------------------------
+            self.send_health_warning_if_needed().await;
+
+            // -------------------------------------------------------
             // CIRCUIT BREAKER — reset if timeout expired
             // -------------------------------------------------------
             if let Some(until) = self.circuit_breaker_until {
@@ -3225,6 +3335,11 @@ impl SolanaBot {
 
                 if let Some(analysis) = self.full_analyze(token).await {
                     println!("✅ Score: {:.1}/100", analysis.total_score);
+                    // Track health stats
+                    self.tokens_qualified_session += 1;
+                    if analysis.total_score > self.best_score_seen {
+                        self.best_score_seen = analysis.total_score;
+                    }
 
                     // Telegram alert — gated by daily limit.
                     // Trading (live + paper) continues regardless of alert quota.
