@@ -733,6 +733,8 @@ struct SolanaBot {
     peak_hours_only: bool,
     momentum_max_pct: f64,
     dynamic_min_score: f64,
+    /// Original MIN_SCORE_TO_BUY from config — never changes, used as floor for dynamic adjust
+    base_min_score: f64,
     last_score_adjust: Instant,
 
     // === Off-peak trading (stricter filters outside peak hours) ===
@@ -889,6 +891,7 @@ impl SolanaBot {
             peak_hours_only,
             momentum_max_pct,
             dynamic_min_score: base_min_score,
+            base_min_score,
             last_score_adjust: Instant::now(),
             // Off-peak trading
             off_peak_trading_enabled,
@@ -2610,13 +2613,27 @@ impl SolanaBot {
                     let _ = self.send_message(&msg).await;
                 }
                 "/score" => {
+                    let drift = self.dynamic_min_score - self.base_min_score;
+                    let drift_str = if drift.abs() < 0.1 {
+                        "no drift".to_string()
+                    } else if drift > 0.0 {
+                        format!("+{:.1} above base (raised by auto-adjust)", drift)
+                    } else {
+                        format!("{:.1} below base", drift)
+                    };
+                    let trades_count = self.paper_state.closed_trades.len();
                     let msg = format!(
                         "🎯 *Score Threshold*\n\
                         Current (dynamic): *{:.1}*/100\n\
-                        Base (from config): {:.1}/100\n\n\
-                        Auto-adjusts every hour based on last 20 trades.",
+                        Base (config): {:.1}/100\n\
+                        Drift: {}\n\n\
+                        Closed trades tracked: {}\n\
+                        Auto-adjusts every hour based on last 20 trades.\n\
+                        _Max drift allowed: +10 above base (bug fix applied)_",
                         self.dynamic_min_score,
-                        self.trading_config.min_score_to_buy,
+                        self.base_min_score,
+                        drift_str,
+                        trades_count,
                     );
                     let _ = self.send_message(&msg).await;
                 }
@@ -2768,11 +2785,15 @@ impl SolanaBot {
         let win_rate = wins as f64 / recent.len() as f64 * 100.0;
 
         let old_score = self.dynamic_min_score;
-        let base_score = self.trading_config.min_score_to_buy;
+        // Use the immutable base score from config — not the mutable trading_config value
+        // which may have already been raised by a previous dynamic adjustment.
+        // Without this fix the floor creeps up permanently and score can reach 95
+        // after a losing streak, making it nearly impossible to ever trade again.
+        let base_score = self.base_min_score;
 
         if win_rate < 40.0 {
-            // Struggling — raise the bar to filter more aggressively
-            self.dynamic_min_score = (self.dynamic_min_score + 2.0).min(95.0);
+            // Struggling — raise the bar to filter more aggressively (max +10 above base)
+            self.dynamic_min_score = (self.dynamic_min_score + 2.0).min(base_score + 10.0).min(95.0);
         } else if win_rate > 60.0 {
             // Performing well — gently relax back toward the configured base
             self.dynamic_min_score = (self.dynamic_min_score - 1.0).max(base_score);
@@ -2780,8 +2801,8 @@ impl SolanaBot {
 
         if (self.dynamic_min_score - old_score).abs() > 0.01 {
             println!(
-                "[SCORE] Auto-adjusted: {:.1} → {:.1} (rolling win rate: {:.1}% over {} trades)",
-                old_score, self.dynamic_min_score, win_rate, recent.len()
+                "[SCORE] Auto-adjusted: {:.1} → {:.1} (rolling win rate: {:.1}% over {} trades, base: {:.1})",
+                old_score, self.dynamic_min_score, win_rate, recent.len(), base_score
             );
             // Propagate to both live and paper buy configs
             self.trading_config.min_score_to_buy = self.dynamic_min_score;
