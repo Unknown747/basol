@@ -362,7 +362,14 @@ impl PaperTradingState {
         // a single 3-stage exit would inflate the win rate by counting 2-3 times.
         let result = if profit_pct > 0.5 {
             if tp_stage == 0 { self.winning_trades += 1; }
-            self.total_profit_sol += profit_sol.max(0.0);
+            // Mirror live accounting (main.rs): split on net profit_sol, not on profit_pct.
+            // If fee exceeds a tiny gain, profit_sol is negative even though profit_pct > 0.5.
+            // Previous code used .max(0.0) which hid this loss and overstated total_profit_sol.
+            if profit_sol >= 0.0 {
+                self.total_profit_sol += profit_sol;
+            } else {
+                self.total_loss_sol += profit_sol.abs();
+            }
             TradeResult::Profit
         } else if profit_pct < -0.5 {
             if tp_stage == 0 { self.losing_trades += 1; }
