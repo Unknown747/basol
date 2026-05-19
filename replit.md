@@ -139,6 +139,25 @@ install.sh         — one-click install untuk Ubuntu VPS (systemd)
 
 Juga dihapus: 4 field dead (`take_profit/stop_loss/trailing_*`) dari `PaperConfig` struct — semua TP/SL/trailing kini baca langsung dari `trading_config` satu sumber.
 
+### Session 4 — Full Codebase Audit (2 bugs fixed, false positives diverifikasi)
+
+| # | File | Bug | Impact |
+|---|---|---|---|
+| 1 | `sell_strategy.rs` | `format_sell_notification` tampilkan P&L kotor (tanpa fee) — paper sell sudah net fee | Live sell notification tampilkan profit ~0.000025 SOL lebih tinggi dari kenyataan |
+| 2 | `strategy.rs` | `compute_fee_analysis` exit cost: jika `liquidity_usd=0` formula runtuh ke 100% impact | Jika dipanggil dengan liquidity nol, `breakeven_pct` jadi tak wajar — guard DEFAULT_PRICE_IMPACT_PCT ditambahkan |
+
+**False positive diverifikasi (bukan bug):**
+- `update_trailing_stop` pakai current_price vs `activate_trailing_stop` pakai highest_price → desain yang benar (ratchet up vs anchor)
+- Score = min_score → min_position_sol → intentional via clamp
+- Trailing stop "100% full close" notification setelah partial TP → akurat (100% dari sisa posisi)
+- Daily loss denominator pakai paper balance → sudah diketahui/didokumentasikan (bug #8 Session 2)
+- `sold_sol = amount_sol × percentage / 100` → benar (capital deployed, bukan proceeds; profit dihitung terpisah)
+
+**Bug config sebelumnya di sesi ini:**
+- `seen_tokens` retention 30 hari → 8 jam (root cause 0 trade di VPS)
+- `MOMENTUM_MAX_PCT` 20% → 40%
+- `OFF_PEAK_MOMENTUM_MAX_PCT` 15% → 30%
+
 ### Session 1 — Paper/Live Parity (4 bug sebelumnya)
 - Score multiplier hardcoded 75 → min_score_to_buy
 - Backtest missing break-even stop

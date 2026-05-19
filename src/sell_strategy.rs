@@ -3,7 +3,7 @@
 // ============================================================
 
 use crate::positions::Position;
-use crate::strategy::TradingConfig;
+use crate::strategy::{TradingConfig, NETWORK_FEE_SOL};
 
 // ============================================================
 // SELL TRIGGER - Types of sell triggers
@@ -377,7 +377,9 @@ pub fn format_sell_notification(
         SellTrigger::PartialTakeProfit { sell_pct, .. } => sell_pct / 100.0,
         _ => 1.0,
     };
-    let profit_sol = position.amount_in_sol * sold_fraction * profit_pct / 100.0;
+    // Deduct network fee so display matches what actually hits the wallet.
+    // Paper sell already shows fee-adjusted profit — this keeps live notification consistent.
+    let profit_sol = position.amount_in_sol * sold_fraction * profit_pct / 100.0 - NETWORK_FEE_SOL;
     let tp_stages  = if position.tp1_fired || position.tp2_fired {
         format!(
             "\n📍 Stage: {}{}",

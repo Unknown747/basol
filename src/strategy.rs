@@ -90,7 +90,13 @@ pub fn compute_fee_analysis(
     // --- Exit cost at TP ---
     let tp_value_sol        = amount_sol * (1.0 + take_profit_pct / 100.0);
     let tp_value_usd        = tp_value_sol * sol_price_usd;
-    let exit_impact_at_tp   = (tp_value_usd / (liquidity_usd + tp_value_usd)) * 100.0;
+    // Guard: if liquidity_usd = 0 the formula collapses to 100% impact.
+    // Use DEFAULT_PRICE_IMPACT_PCT as floor — mirrors the entry cost guard above.
+    let exit_impact_at_tp   = if liquidity_usd > 0.0 {
+        (tp_value_usd / (liquidity_usd + tp_value_usd)) * 100.0
+    } else {
+        DEFAULT_PRICE_IMPACT_PCT
+    };
     let exit_slip_at_tp_sol = tp_value_sol * slippage_pct / 100.0;
     let exit_imp_at_tp_sol  = tp_value_sol * exit_impact_at_tp / 100.0;
     let exit_cost_at_tp_sol = exit_slip_at_tp_sol + exit_imp_at_tp_sol + NETWORK_FEE_SOL;
@@ -99,7 +105,11 @@ pub fn compute_fee_analysis(
     // --- Exit cost at SL ---
     let sl_value_sol        = amount_sol * (1.0 - stop_loss_pct / 100.0);
     let sl_value_usd        = sl_value_sol * sol_price_usd;
-    let exit_impact_at_sl   = (sl_value_usd / (liquidity_usd + sl_value_usd)) * 100.0;
+    let exit_impact_at_sl   = if liquidity_usd > 0.0 {
+        (sl_value_usd / (liquidity_usd + sl_value_usd)) * 100.0
+    } else {
+        DEFAULT_PRICE_IMPACT_PCT
+    };
     let exit_slip_at_sl_sol = sl_value_sol * slippage_pct / 100.0;
     let exit_imp_at_sl_sol  = sl_value_sol * exit_impact_at_sl / 100.0;
     let exit_cost_at_sl_sol = exit_slip_at_sl_sol + exit_imp_at_sl_sol + NETWORK_FEE_SOL;
