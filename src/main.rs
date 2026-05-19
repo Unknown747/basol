@@ -1004,12 +1004,23 @@ impl SolanaBot {
                         let saved_daily_limit_paused = data.daily_limit_paused;
 
                         self.data = data;
-                        let cutoff = Utc::now() - chrono::Duration::days(30);
+                        // Retain only tokens seen in the last 8h.
+                        // DexScreener only shows tokens ≤6h old (MAX_TOKEN_AGE_HOURS).
+                        // The old 30-day window meant every token in the current
+                        // DexScreener feed was already in seen_tokens after a few hours
+                        // of uptime — causing 0 new tokens found every scan permanently.
+                        // 8h = 6h token age cap + 2h safety buffer to avoid re-analysis.
+                        let cutoff = Utc::now() - chrono::Duration::hours(8);
+                        let before = self.data.seen_tokens.len();
                         self.data.seen_tokens.retain(|_, ts| {
                             ts.parse::<DateTime<Utc>>()
                                 .map(|t| t > cutoff)
                                 .unwrap_or(false)
                         });
+                        let pruned = before - self.data.seen_tokens.len();
+                        if pruned > 0 {
+                            println!("[SEEN] Pruned {pruned} stale token entries (>8h old) on load");
+                        }
                         self.positions = saved_positions;
 
                         // Restore daily loss protection — survives restart so the bot
@@ -3571,6 +3582,21 @@ impl SolanaBot {
                 println!("\n💰 Checking profit on tracked tokens...");
                 self.check_profits().await;
                 last_profit_check = Instant::now();
+            }
+
+            // -------------------------------------------------------
+            // PRUNE seen_tokens mid-run
+            // Without this, seen_tokens grows unbounded and after ~6h every
+            // token in DexScreener's ≤6h window is already marked seen → 0 new
+            // tokens per scan. Pruning every ~5 minutes keeps the set fresh.
+            // -------------------------------------------------------
+            {
+                let cutoff = Utc::now() - chrono::Duration::hours(8);
+                self.data.seen_tokens.retain(|_, ts| {
+                    ts.parse::<DateTime<Utc>>()
+                        .map(|t| t > cutoff)
+                        .unwrap_or(false)
+                });
             }
 
             // -------------------------------------------------------
