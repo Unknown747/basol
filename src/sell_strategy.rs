@@ -339,7 +339,27 @@ pub fn evaluate_all_positions(
                 }
             }
         } else {
-            println!("[SELL EVAL] ⚠️  {} - No price available, skipping", position.symbol);
+            // Price unavailable — token may have dropped off DexScreener.
+            // Still enforce time exit to prevent infinite holds on stale positions.
+            let age = position.age_minutes();
+            if config.max_hold_minutes > 0 && age >= config.max_hold_minutes as i64 {
+                println!(
+                    "[SELL EVAL] ⏰ {} - Force time exit: price unavailable after {} min (limit: {})",
+                    position.symbol, age, config.max_hold_minutes
+                );
+                to_sell.push((
+                    addr.clone(),
+                    SellDecision::Sell {
+                        percentage: 100.0,
+                        trigger: SellTrigger::TimeExit {
+                            hold_minutes: age,
+                            profit_percent: 0.0,
+                        },
+                    },
+                ));
+            } else {
+                println!("[SELL EVAL] ⚠️  {} - No price available, skipping", position.symbol);
+            }
         }
     }
 

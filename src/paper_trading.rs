@@ -486,7 +486,28 @@ impl PaperTradingState {
         for (addr, pos) in self.positions.iter_mut() {
             let current_price = match prices.get(addr) {
                 Some(&p) => p,
-                None => continue,
+                None => {
+                    // Price unavailable — DexScreener no longer lists this token.
+                    // Still check time exit to prevent infinite holds on stale positions.
+                    let age_minutes = pos.age_minutes();
+                    if max_hold_minutes > 0 && age_minutes >= max_hold_minutes as i64 {
+                        println!(
+                            "[PAPER SELL] ⏰ {} - Force time exit: price unavailable after {} min (limit: {})",
+                            pos.symbol, age_minutes, max_hold_minutes
+                        );
+                        // Exit at entry price = 0% P&L — capital recovered, can't know actual price
+                        to_sell.push((
+                            addr.clone(),
+                            format!("Time Exit {age_minutes} min | P&L: 0.0% (price unavailable)"),
+                            pos.buy_price_usd,
+                            100.0,
+                            0,
+                        ));
+                    } else {
+                        println!("[PAPER SELL] ⚠️  {} - No price available, skipping", pos.symbol);
+                    }
+                    continue;
+                }
             };
 
             if current_price > pos.highest_price {

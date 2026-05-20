@@ -139,6 +139,18 @@ install.sh         — one-click install untuk Ubuntu VPS (systemd)
 
 Juga dihapus: 4 field dead (`take_profit/stop_loss/trailing_*`) dari `PaperConfig` struct — semua TP/SL/trailing kini baca langsung dari `trading_config` satu sumber.
 
+### Session 5 — Paper Trading Report Analysis (1 bug fixed)
+
+| # | File | Bug | Impact |
+|---|---|---|---|
+| 1 | `paper_trading.rs` + `sell_strategy.rs` | `None => continue` saat price unavailable skip SEMUA check termasuk time exit | Posisi held selamanya jika token hilang dari DexScreener — terbukti: UNKNOWN held 373 menit instead of 25 menit |
+
+**Root cause:** DexScreener berhenti menampilkan token lama setelah beberapa jam. Saat price tidak ada di price map, loop langsung `continue` tanpa cek `age_minutes >= max_hold_minutes`. Fixed: force time exit at entry price (0% P&L) jika price unavailable tapi umur posisi sudah melebihi batas.
+
+**False positive diverifikasi:**
+- Worst trade -10.2% di report vs -1.56% di JSON → data dari sesi bot sebelumnya (memory tidak sync dengan JSON setelah restart)
+- Balance 0.0950 SOL di report vs 0.0695 SOL di JSON → open position 0.03 SOL yang dibuka setelah report dikirim
+
 ### Session 4 — Full Codebase Audit (2 bugs fixed, false positives diverifikasi)
 
 | # | File | Bug | Impact |
