@@ -789,6 +789,21 @@ impl SolanaBot {
         let _ = dotenvy::from_filename_override("config.env");
         let _ = dotenvy::dotenv_override();
 
+        // Auto-configure Helius RPC for on-chain calls (wallet, balance) if still on public node
+        let current_rpc = std::env::var("SOLANA_RPC_URL")
+            .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+        if current_rpc.contains("api.mainnet-beta.solana.com") {
+            if let Ok(raw_keys) = std::env::var("HELIUS_API_KEY") {
+                let first_key = raw_keys.split(',').next().unwrap_or("").trim().to_string();
+                if !first_key.is_empty() && !first_key.starts_with("your_") {
+                    let helius_rpc = format!("https://mainnet.helius-rpc.com/?api-key={first_key}");
+                    // Safety: single-threaded startup, no other threads reading env yet
+                    unsafe { std::env::set_var("SOLANA_RPC_URL", &helius_rpc); }
+                    println!("[RPC] Auto-configured Helius RPC (fast) from HELIUS_API_KEY");
+                }
+            }
+        }
+
         // Read required config from environment (panic with clear message if missing)
         let helius_keys = HeliusKeyPool::from_env();
         let telegram_token = std::env::var("TELEGRAM_BOT_TOKEN")
@@ -3717,7 +3732,7 @@ async fn main() {
     println!("  PAPER_TRADING_ENABLED = {}", std::env::var("PAPER_TRADING_ENABLED").unwrap_or("false".to_string()));
     println!("  MAX_POSITION_SOL      = {}", std::env::var("MAX_POSITION_SOL").unwrap_or("0.03".to_string()));
     println!("  TAKE_PROFIT_PERCENT   = {}", std::env::var("TAKE_PROFIT_PERCENT").unwrap_or("25.0".to_string()));
-    println!("  STOP_LOSS_PERCENT     = {}", std::env::var("STOP_LOSS_PERCENT").unwrap_or("6.0".to_string()));
+    println!("  STOP_LOSS_PERCENT     = {}", std::env::var("STOP_LOSS_PERCENT").unwrap_or("5.0".to_string()));
     println!("  WALLET_PRIVATE_KEY    = {}", if std::env::var("WALLET_PRIVATE_KEY").is_ok() { "✅ SET" } else { "❌ NOT SET" });
     println!("── Protection (v3.0) ──────────────────────");
     println!("  CIRCUIT_BREAKER_LOSSES= {}", std::env::var("CIRCUIT_BREAKER_LOSSES").unwrap_or("4".to_string()));

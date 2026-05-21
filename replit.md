@@ -170,6 +170,26 @@ Juga dihapus: 4 field dead (`take_profit/stop_loss/trailing_*`) dari `PaperConfi
 - `MOMENTUM_MAX_PCT` 20% → 40%
 - `OFF_PEAK_MOMENTUM_MAX_PCT` 15% → 30%
 
+### Session 6 — Full Codebase Audit + 3 Performance Improvements (1 bug fixed, 3 improvements)
+
+| # | File | Perubahan | Impact |
+|---|---|---|---|
+| 1 | `main.rs` | Bug: startup banner tampilkan default SL `"6.0"` padahal config.env = `5.0` | Display mismatch di log startup — diperbaiki ke `"5.0"` |
+| 2 | `main.rs` | Helius RPC auto-config: jika `SOLANA_RPC_URL` masih public mainnet, otomatis set ke `mainnet.helius-rpc.com` dari `HELIUS_API_KEY` | Live trading & balance check pakai Helius RPC (fast) bukan public node (slow/unreliable) |
+| 3 | `config.env` | `PAPER_REPORT_INTERVAL_SECS`: 3600 → **1800** (30 menit) | Laporan 2× lebih sering — pantau performa paper trading lebih cepat |
+| 4 | `config.env` | `MIN_POSITION_SOL`: 0.03 → **0.015** | Dynamic position sizing aktif: score 40-70 → 0.015 SOL (konservatif), score 70-100 → 0.015-0.03 SOL (scaling up) |
+
+**False positives (bukan bug):**
+- `off_peak_*` defaults di code tidak cocok config.env → tidak masalah karena OFF_PEAK_TRADING_ENABLED=false, plus config.env selalu override
+- `momentum_max_pct` code default 30.0 vs config.env 55.0 → tidak masalah karena config.env override; default hanya fallback jika file hilang
+
+**Dynamic sizing math (MIN=0.015, MAX=0.03, threshold=40):**
+- Score 40-70 → raw_size < 0.015 → clamp ke 0.015 SOL (konservatif untuk borderline tokens)
+- Score 70 → 0.5 × 0.03 = 0.015 SOL (tepat di min)
+- Score 80 → 0.667 × 0.03 = 0.020 SOL
+- Score 90 → 0.833 × 0.03 = 0.025 SOL
+- Score 100 → 1.0 × 0.03 = 0.030 SOL (full size untuk exceptional tokens)
+
 ### Session 1 — Paper/Live Parity (4 bug sebelumnya)
 - Score multiplier hardcoded 75 → min_score_to_buy
 - Backtest missing break-even stop
