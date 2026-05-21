@@ -69,7 +69,7 @@ if ! command -v cargo &>/dev/null; then
     success "Rust installed: $(rustc --version)"
 else
     info "Rust found: $(rustc --version)"
-    rustup update stable -q
+    rustup update stable 2>&1 | tail -1
     success "Rust toolchain up to date"
 fi
 
