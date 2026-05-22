@@ -30,9 +30,9 @@ use std::fs;
 // ============================================================
 // CONFIG - Bot configuration constants
 // ============================================================
-const SCAN_INTERVAL_SECS: u64          = 30;
+const SCAN_INTERVAL_SECS: u64          = 15;   // 30→15: 2x faster new token discovery
 const PROFIT_CHECK_INTERVAL_SECS: u64  = 300;
-const SELL_CHECK_INTERVAL_SECS: u64    = 60;    // Check positions every 60 seconds
+const SELL_CHECK_INTERVAL_SECS: u64    = 20;   // 60→20: 3x faster SL/TP trigger, minimize rug pull gap
 const SOL_PRICE_UPDATE_INTERVAL_SECS: u64 = 300; // Refresh SOL price every 5 minutes
 const SAVE_INTERVAL_MINS: i64     = 10;
 const MAX_TOKEN_AGE_HOURS: i64    = 6;
