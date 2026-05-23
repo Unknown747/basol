@@ -2846,6 +2846,14 @@ impl SolanaBot {
                     let report = self.test_helius_keys().await;
                     let _ = self.send_message(&report).await;
                 }
+                "/config" => {
+                    let msg = self.build_config_message();
+                    let _ = self.send_message(&msg).await;
+                }
+                "/help" => {
+                    let msg = Self::build_help_message();
+                    let _ = self.send_message(&msg).await;
+                }
                 _ => {}
             }
         }
@@ -2978,6 +2986,103 @@ impl SolanaBot {
             self.paper_state.worst_trade_pct, self.paper_state.worst_trade_symbol,
         ));
         msg
+    }
+
+    fn build_config_message(&self) -> String {
+        let tc = &self.trading_config;
+        let peak_str = if self.peak_hours_only {
+            if self.off_peak_trading_enabled {
+                "13-17 & 20-00 UTC + off-peak strict mode"
+            } else {
+                "ON — 13-17 & 20-00 UTC only"
+            }
+        } else {
+            "OFF — scan 24/7"
+        };
+        let live_str = if tc.trading_enabled && self.wallet.is_some() {
+            "🟢 ACTIVE"
+        } else {
+            "🔴 INACTIVE (TRADING_ENABLED=false or no wallet)"
+        };
+        format!(
+            "⚙️ **Active Config**\n\
+            ═══════════════════════════════\n\n\
+            🔒 **Mode:**\n\
+            Live Trading: {}\n\
+            Paper Trading: {}\n\
+            SOL Price: ${:.2} (auto-updated)\n\n\
+            🎯 **Buy Filters:**\n\
+            Min Score: {:.1}/100 (dynamic: {:.1})\n\
+            Min Liquidity: ${:.0}\n\
+            Max Positions: {}\n\
+            Momentum Filter: skip if >{:.0}% (1h)\n\
+            Peak Hours: {}\n\n\
+            💰 **Position Sizing:**\n\
+            Max Size: {:.3} SOL\n\
+            Min Size: {:.3} SOL\n\
+            Slippage: {:.1}%\n\n\
+            📈 **Exit Strategy:**\n\
+            TP1: +{:.0}% → sell {:.0}% of position\n\
+            TP2: +{:.0}% → sell {:.0}% of remainder\n\
+            Trailing: activates at +{:.0}%, distance {:.1}%\n\
+            Final TP: +{:.0}% (sell all remaining)\n\
+            Stop Loss: -{:.0}%\n\
+            Break-even stop after TP1: {}\n\
+            Time Exit: >{} min if P&L < {:.1}%\n\n\
+            🛡️ **Protection:**\n\
+            Circuit Breaker: {} consecutive losses → {}h pause\n\
+            Daily Max Loss: {:.0}% of initial balance\n\n\
+            _Edit `config.env` + restart bot to change any value._",
+            live_str,
+            if self.paper_state.initial_balance_sol > 0.0 {
+                format!("🟢 ACTIVE ({:.4} SOL virtual)", self.paper_state.current_balance_sol)
+            } else {
+                "🔴 INACTIVE".to_string()
+            },
+            self.sol_price_usd,
+            self.base_min_score, self.dynamic_min_score,
+            tc.min_liquidity_usd,
+            tc.max_positions,
+            self.momentum_max_pct,
+            peak_str,
+            tc.max_position_sol,
+            tc.min_position_sol,
+            tc.default_slippage,
+            tc.tp1_percent, tc.tp1_sell_percent,
+            tc.tp2_percent, tc.tp2_sell_percent,
+            tc.trailing_start_percent, tc.trailing_distance_percent,
+            tc.take_profit_percent,
+            tc.stop_loss_percent,
+            if tc.breakeven_after_tp1 { "✅ ON" } else { "❌ OFF" },
+            tc.max_hold_minutes, tc.time_exit_threshold_pct,
+            self.circuit_breaker_losses, self.circuit_breaker_pause_hours,
+            tc.daily_max_loss_pct,
+        )
+    }
+
+    fn build_help_message() -> String {
+        "📖 **Basol Bot — Command Reference**\n\
+        ═══════════════════════════════\n\n\
+        📊 **Info & Monitoring:**\n\
+        /status — bot state, P&L, win rate, scan health\n\
+        /trades — last 10 closed paper trades\n\
+        /score  — current score threshold + auto-adjust drift\n\
+        /config — all active strategy settings (TP, SL, sizing…)\n\
+        /helius — test all Helius API keys + rotation status\n\n\
+        ⚙️ **Control:**\n\
+        /pause  — pause new buys (sell monitoring continues)\n\
+        /resume — resume buys + clear circuit breaker\n\n\
+        ⛔ **Blacklist:**\n\
+        /blacklist — show count of blacklisted tokens\n\
+        /blacklist `<address>` — add token to blacklist\n\
+        _(blacklist survives restarts, stored in bot\\_data.json)_\n\n\
+        ℹ️ **Notes:**\n\
+        • Edit `config.env` to change strategy (TP, SL, score…)\n\
+        • Restart workflow/service after editing config\n\
+        • Scan active: 13-17 & 20-00 UTC (peak hours)\n\
+        • Paper trading runs 24/7 (positions monitored always)\n\
+        • Inline buttons ⏸/📈 in buy notifications also work\n\n\
+        /help — show this message".to_string()
     }
 
     // ============================================================

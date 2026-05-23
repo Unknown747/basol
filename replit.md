@@ -110,7 +110,7 @@ install.sh         — one-click install untuk Ubuntu VPS (systemd)
 - **Auto-Adjust Score**: evaluasi 20 trade terakhir tiap jam, adjust threshold (max drift +10 di atas base)
 - **Scan Health Alert**: alert Telegram jika tidak ada trade selama 6 jam
 - **Helius Key Rotation**: auto-rotate saat 429 rate limit (support 5 key)
-- **Telegram Commands**: `/status`, `/pause`, `/resume`, `/trades`, `/score`, `/blacklist`, `/helius`
+- **Telegram Commands**: `/status`, `/pause`, `/resume`, `/trades`, `/score`, `/blacklist`, `/helius`, `/config`, `/help`
 - **Inline Button**: tombol ⏸ Pause dan 📈 Stats di notifikasi buy berfungsi
 - **Daily/Weekly Report**: laporan otomatis ke Telegram
 
